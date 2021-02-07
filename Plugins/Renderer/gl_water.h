@@ -11,6 +11,8 @@ typedef struct
 	int zmax;
 	int time;
 	int fresnel;
+	int depthfactor;
+	int normfactor;
 	int abovewater;
 	int normalmap;
 	int refractmap;
@@ -27,22 +29,30 @@ typedef struct
 typedef struct r_water_s
 {
 	GLuint refractmap;
-	GLuint reflectmap;
 	GLuint depthrefrmap;
+
+	GLuint reflectmap;
+	GLuint depthreflmap;
+
 	vec3_t vecs;
 	float distances;
 	cl_entity_t *ent;
 	vec3_t org;
-	struct r_water_s *next;
+	colorVec color;
 	int is3dsky;
+	int texwidth;
+	int texheight;
+	int free;
+	int framecount;
+	qboolean refractmap_ready;
+	qboolean reflectmap_ready;
+	struct r_water_s *next;
 }r_water_t;
 
 //renderer
 extern qboolean drawreflect;
 extern qboolean drawrefract;
-extern mplane_t custom_frustum[4];
-extern int water_update_counter;
-extern int water_texture_size;
+
 //water
 extern r_water_t *curwater;
 extern r_water_t *waters_free;
@@ -58,34 +68,19 @@ extern SHADER_DEFINE(drawdepth);
 //water fog
 extern int *g_bUserFogOn;
 extern int save_userfogon;
-extern int waterfog_on;
-
-typedef struct
-{
-	qboolean fog;
-	vec4_t color;
-	float start;
-	float end;
-	float density;
-	float fresnel;
-	qboolean active;
-}water_parm_t;
-
-extern water_parm_t water_parm;
 
 //cvar
 extern cvar_t *r_water;
 extern cvar_t *r_water_debug;
 extern cvar_t *r_water_fresnel;
+extern cvar_t *r_water_depthfactor;
+extern cvar_t *r_water_normfactor;
+extern cvar_t *r_water_novis;
+extern cvar_t *r_water_texscale;
 
-void R_AddWater(cl_entity_t *ent, vec3_t p);
+void R_AddEntityWater(cl_entity_t *ent, vec3_t p, colorVec *color);
 void R_InitWater(void);
 void R_ClearWater(void);
-void R_SetupReflect(void);
-void R_FinishReflect(void);
-void R_SetupRefract(void);
-void R_FinishRefract(void);
-void R_UpdateWater(void);
-void R_SetupClip(qboolean isdrawworld);
-void R_SetWaterParm(water_parm_t *parm);
-void R_SetCustomFrustum(void);
+void R_RenderWaterView(void);
+void R_EnableClip(qboolean isdrawworld);
+void R_FreeDeadWaters(void);

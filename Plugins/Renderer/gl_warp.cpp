@@ -74,6 +74,61 @@ void EmitWaterPolysWireFrame(msurface_t *fa, int direction, qboolean useProgram)
 	}
 }
 
+void Matrix4x4_CreateTranslate(vec4_t *out, float x, float y, float z)
+{
+	out[0][0] = 1.0f;
+	out[0][1] = 0.0f;
+	out[0][2] = 0.0f;
+	out[0][3] = x;
+	out[1][0] = 0.0f;
+	out[1][1] = 1.0f;
+	out[1][2] = 0.0f;
+	out[1][3] = y;
+	out[2][0] = 0.0f;
+	out[2][1] = 0.0f;
+	out[2][2] = 1.0f;
+	out[2][3] = z;
+	out[3][0] = 0.0f;
+	out[3][1] = 0.0f;
+	out[3][2] = 0.0f;
+	out[3][3] = 1.0f;
+}
+
+void Matrix4x4_CreateRotate(vec4_t *out, float angle, float x, float y, float z)
+{
+	float	len, c, s;
+
+	len = x * x + y * y + z * z;
+	if (len != 0.0f) len = 1.0f / sqrt(len);
+	x *= len;
+	y *= len;
+	z *= len;
+
+	angle *= (-M_PI / 180.0f);
+	s = sin(angle);
+	c = cos(angle);
+
+	out[0][0] = x * x + c * (1 - x * x);
+	out[0][1] = x * y * (1 - c) + z * s;
+	out[0][2] = z * x * (1 - c) - y * s;
+	out[0][3] = 0.0f;
+
+	out[1][0] = x * y * (1 - c) - z * s;
+	out[1][1] = y * y + c * (1 - y * y);
+	out[1][2] = y * z * (1 - c) + x * s;
+	out[1][3] = 0.0f;
+
+	out[2][0] = z * x * (1 - c) + y * s;
+	out[2][1] = y * z * (1 - c) - x * s;
+	out[2][2] = z * z + c * (1 - z * z);
+	out[2][3] = 0.0f;
+
+	out[3][0] = 0.0f;
+	out[3][1] = 0.0f;
+	out[3][2] = 0.0f;
+	out[3][3] = 1.0f;
+}
+
 void EmitWaterPolys(msurface_t *fa, int direction)
 {
 	glpoly_t *p;
@@ -88,59 +143,18 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 	if (drawreflect || drawrefract)
 		return;
 
-	float clientTime = (*cl_time);
+	if (fa->texinfo->texture)
+	{
+		if(0 == strncmp(fa->texinfo->texture->name, "!toxi", sizeof("!toxi") - 1) || 
+			0 == strcmp(fa->texinfo->texture->name, "!radio"))
+		return gRefFuncs.EmitWaterPolys(fa, direction);
+	}
 
-	//if(strcmp(fa->texinfo->texture->name, "!waterblue"))
-	//	return gRefFuncs.EmitWaterPolys(fa, direction);
+	float clientTime = (*cl_time);
 
 	tempVert[0] = fa->polys->verts[0][0];
 	tempVert[1] = fa->polys->verts[0][1];
 	tempVert[2] = fa->polys->verts[0][2];
-
-	if(r_water->value && water.program && gl_mtexable > 2)
-	{
-		R_AddWater((*currententity), tempVert);
-		if(curwater)
-		{
-			qglUseProgramObjectARB(water.program);
-
-			qglUniform4fARB(water.waterfogcolor, water_parm.color[0], water_parm.color[1], water_parm.color[2], water_parm.color[3]);
-			qglUniform3fARB(water.eyepos, r_refdef->vieworg[0], r_refdef->vieworg[1], r_refdef->vieworg[2]);
-			qglUniform3fARB(water.eyedir, vpn[0], vpn[1], vpn[2]);
-			qglUniform1fARB(water.zmax, (r_params.movevars) ? r_params.movevars->zmax : 4096);
-			qglUniform1fARB(water.time, (*cl_time));
-			//if(water_parm.active)
-			//	qglUniform1fARB(water.fresnel, clamp(water_parm.fresnel, 0.0, 10000.0));
-			//else
-				qglUniform1fARB(water.fresnel, clamp(r_water_fresnel->value, 0.0, 1.0));
-			qglUniform1fARB(water.abovewater, (r_refdef->vieworg[2] > curwater->vecs[2]) ? 1.0f : 0.0f);
-
-			qglUniform1iARB(water.normalmap, 0);
-			qglUniform1iARB(water.refractmap, 1);
-			qglUniform1iARB(water.reflectmap, 2);
-			qglUniform1iARB(water.depthrefrmap, 3);
-
-			qglDisable(GL_BLEND);
-
-			GL_SelectTexture(TEXTURE0_SGIS);
-			qglEnable(GL_TEXTURE_2D);
-			GL_Bind(water_normalmap);
-
-			GL_EnableMultitexture();
-			qglEnable(GL_TEXTURE_2D);
-			GL_Bind(curwater->refractmap);
-
-			GL_SelectTexture(TEXTURE2_SGIS);
-			qglEnable(GL_TEXTURE_2D);
-			GL_Bind(curwater->reflectmap);
-
-			GL_SelectTexture(TEXTURE3_SGIS);
-			qglEnable(GL_TEXTURE_2D);
-			GL_Bind(curwater->depthrefrmap);
-
-			useProgram = 1;
-		}
-	}
 
 	pSourcePalette = fa->texinfo->texture->pPal;
 	gWaterColor.r = pSourcePalette[9];
@@ -150,6 +164,61 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 	cshift_water.g = pSourcePalette[10];
 	cshift_water.b = pSourcePalette[11];
 	cshift_water.a = pSourcePalette[12];
+
+	gWaterColor.a = 255;
+	if ((*currententity)->curstate.rendermode == kRenderTransTexture)
+		gWaterColor.a = (*r_blend) * 255;
+
+	if ((*currententity) != r_worldentity)
+	{
+		VectorAdd(tempVert, (*currententity)->curstate.origin, tempVert);
+	}
+
+	if(r_water && r_water->value && water.program)
+	{
+		R_AddEntityWater((*currententity), tempVert, &gWaterColor);
+		if(curwater && curwater->reflectmap_ready && curwater->refractmap_ready)
+		{
+			qglUseProgramObjectARB(water.program);
+
+			float alpha = 1;
+			if((*currententity)->curstate.rendermode == kRenderTransTexture)
+				alpha = (*r_blend);
+
+			qglUniform4fARB(water.waterfogcolor, curwater->color.r / 255.0f, curwater->color.g / 255.0f, curwater->color.b / 255.0f, alpha);
+			qglUniform3fARB(water.eyepos, r_refdef->vieworg[0], r_refdef->vieworg[1], r_refdef->vieworg[2]);
+			qglUniform3fARB(water.eyedir, vpn[0], vpn[1], vpn[2]);
+			qglUniform1fARB(water.time, clientTime);
+			qglUniform1fARB(water.fresnel, clamp(r_water_fresnel->value, 0.0, 10.0));
+			qglUniform1fARB(water.depthfactor, clamp(r_water_depthfactor->value, 0.0, 1000.0));
+			qglUniform1fARB(water.normfactor, clamp(r_water_normfactor->value, 0.0, 1000.0));
+			qglUniform1fARB(water.abovewater, (*cl_waterlevel <= 2 /*r_refdef->vieworg[2] > curwater->vecs[2]*/) ? 1.0f : 0.0f);
+
+			qglUniform1iARB(water.normalmap, 0);
+			qglUniform1iARB(water.refractmap, 1);
+			qglUniform1iARB(water.reflectmap, 2);
+			qglUniform1iARB(water.depthrefrmap, 3);
+
+			qglEnable(GL_BLEND);
+			qglBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+			GL_SelectTexture(TEXTURE0_SGIS);
+			GL_Bind(water_normalmap);
+
+			GL_EnableMultitexture();
+			GL_Bind(curwater->refractmap);
+
+			qglActiveTextureARB(TEXTURE2_SGIS);
+			qglEnable(GL_TEXTURE_2D);
+			qglBindTexture(GL_TEXTURE_2D, curwater->reflectmap);
+
+			qglActiveTextureARB(TEXTURE3_SGIS);
+			qglEnable(GL_TEXTURE_2D);
+			qglBindTexture(GL_TEXTURE_2D, curwater->depthrefrmap);
+
+			useProgram = 1;
+		}
+	}
 
 	if (fa->polys->verts[0][2] >= r_refdef->vieworg[2])
 		scale = (*currententity)->curstate.scale;
@@ -216,17 +285,14 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 
 	if(useProgram)
 	{
-		GL_SelectTexture(TEXTURE3_SGIS);
-		GL_Bind(0);
+		qglActiveTextureARB(TEXTURE3_SGIS);
 		qglDisable(GL_TEXTURE_2D);
 
-		GL_SelectTexture(TEXTURE2_SGIS);
-		GL_Bind(0);
+		qglActiveTextureARB(TEXTURE2_SGIS);
 		qglDisable(GL_TEXTURE_2D);
 
-		GL_SelectTexture(TEXTURE1_SGIS);
-		GL_Bind(0);
-		
+		qglActiveTextureARB(TEXTURE1_SGIS);
+
 		GL_DisableMultitexture();
 
 		qglUseProgramObjectARB(0);
@@ -239,6 +305,9 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 
 int *gSkyTexNumber;
 
+skybox_t *skymins;
+skybox_t *skymaxs;
+
 vec3_t skyclip[6] =
 {
 	{ 1, 1, 0 },
@@ -248,8 +317,6 @@ vec3_t skyclip[6] =
 	{ 1, 0, 1 },
 	{ -1, 0, 1 } 
 };
-
-int c_sky;
 
 int st_to_vec[6][3] =
 {
@@ -275,8 +342,6 @@ int vec_to_st[6][3] =
 	{ -2, 1, -3 }
 };
 
-float skymins[2][6], skymaxs[2][6];
-
 void DrawSkyPolygon(int nump, vec3_t vecs)
 {
 	int i, j;
@@ -284,8 +349,6 @@ void DrawSkyPolygon(int nump, vec3_t vecs)
 	float s, t, dv;
 	int axis;
 	float *vp;
-
-	c_sky++;
 
 	VectorCopy(vec3_origin, v);
 
@@ -343,17 +406,17 @@ void DrawSkyPolygon(int nump, vec3_t vecs)
 		else
 			t = vecs[j - 1] / dv;
 
-		if (s < skymins[0][axis])
-			skymins[0][axis] = s;
+		if (s < skymins->v[0][axis])
+			skymins->v[0][axis] = s;
 
-		if (t < skymins[1][axis])
-			skymins[1][axis] = t;
+		if (t < skymins->v[1][axis])
+			skymins->v[1][axis] = t;
 
-		if (s > skymaxs[0][axis])
-			skymaxs[0][axis] = s;
+		if (s > skymaxs->v[0][axis])
+			skymaxs->v[0][axis] = s;
 
-		if (t > skymaxs[1][axis])
-			skymaxs[1][axis] = t;
+		if (t > skymaxs->v[1][axis])
+			skymaxs->v[1][axis] = t;
 	}
 }
 
@@ -476,8 +539,6 @@ void R_DrawSkyChain(msurface_t *s)
 	if(draw3dsky && !drawreflect && !drawrefract)
 		return;
 
-	c_sky = 0;
-
 	for (fa = s; fa; fa = fa->texturechain)
 	{
 		for (p = fa->polys; p; p = p->next)
@@ -500,8 +561,8 @@ void R_ClearSkyBox(void)
 
 	for (i = 0; i < 6; i++)
 	{
-		skymins[0][i] = skymins[1][i] = 9999;
-		skymaxs[0][i] = skymaxs[1][i] = -9999;
+		skymins->v[0][i] = skymins->v[1][i] = 9999;
+		skymaxs->v[0][i] = skymaxs->v[1][i] = -9999;
 	}
 }
 
@@ -559,13 +620,11 @@ void R_DrawSkyBox(void)
 	if(drawreflect || drawrefract)
 	{
 		qglDisable(GL_CLIP_PLANE0);
-		if(waterfog_on)
-			qglDisable(GL_FOG);
 	}
 
 	for (i = 0; i < 6; i++)
 	{
-		if (skymins[0][i] >= skymaxs[0][i] || skymins[1][i] >= skymaxs[1][i])
+		if (skymins->v[0][i] >= skymaxs->v[0][i] || skymins->v[1][i] >= skymaxs->v[1][i])
 			continue;
 
 		order = skytexorder[i];
@@ -579,16 +638,14 @@ void R_DrawSkyBox(void)
 		}
 
 		qglBegin(GL_QUADS);
-		MakeSkyVec(skymins[0][i], skymins[1][i], i);
-		MakeSkyVec(skymins[0][i], skymaxs[1][i], i);
-		MakeSkyVec(skymaxs[0][i], skymaxs[1][i], i);
-		MakeSkyVec(skymaxs[0][i], skymins[1][i], i);
+		MakeSkyVec(skymins->v[0][i], skymins->v[1][i], i);
+		MakeSkyVec(skymins->v[0][i], skymaxs->v[1][i], i);
+		MakeSkyVec(skymaxs->v[0][i], skymaxs->v[1][i], i);
+		MakeSkyVec(skymaxs->v[0][i], skymins->v[1][i], i);
 		qglEnd();
 	}
 	if(drawreflect || drawrefract)
 	{
-		if(waterfog_on)
-			qglEnable(GL_FOG);
 		qglEnable(GL_CLIP_PLANE0);
 	}
 }

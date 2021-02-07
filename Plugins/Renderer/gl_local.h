@@ -59,12 +59,11 @@ extern float *windowvideoaspect;
 extern float videowindowaspect_old;
 extern float windowvideoaspect_old;
 
-extern GLuint screenframebuffer;
 extern GLuint drawframebuffer;
 extern GLuint readframebuffer;
 
 extern float scr_fov_value;
-
+extern mplane_t *frustum;
 extern mleaf_t **r_viewleaf, **r_oldviewleaf;
 extern texture_t *r_notexture_mip;
 
@@ -85,10 +84,8 @@ extern vec_t *r_entorigin;
 extern int *r_framecount;
 extern int *r_visframecount;
 
-//extern float r_world_matrix[16];
-//extern float r_projection_matrix[16];
-
 extern frame_t *cl_frames;
+extern int size_of_frame;
 extern int *cl_parsecount;
 extern int *cl_waterlevel;
 extern double *cl_time;
@@ -108,6 +105,14 @@ extern int gl_mtexable;
 extern int gl_max_texture_size;
 extern float gl_max_ansio;
 extern float gl_force_ansio;
+extern int gl_msaa_samples;
+extern int gl_csaa_samples;
+
+extern int *gl_msaa_fbo;
+extern int *gl_backbuffer_fbo;
+
+extern int glwidth;
+extern int glheight;
 
 extern qboolean bDoMSAAFBO;
 extern qboolean bDoScaledFBO;
@@ -117,9 +122,7 @@ extern qboolean bNoStretchAspect;
 
 extern FBO_Container_t s_MSAAFBO;
 extern FBO_Container_t s_BackBufferFBO;
-extern FBO_Container_t s_3DHUDFBO;
-extern FBO_Container_t s_WaterFBO;
-extern FBO_Container_t s_ShadowFBO;
+extern FBO_Container_t s_BackBufferFBO2;
 extern FBO_Container_t s_DownSampleFBO[DOWNSAMPLE_BUFFERS];
 extern FBO_Container_t s_LuminFBO[LUMIN_BUFFERS];
 extern FBO_Container_t s_Lumin1x1FBO[LUMIN1x1_BUFFERS];
@@ -127,7 +130,8 @@ extern FBO_Container_t s_BrightPassFBO;
 extern FBO_Container_t s_BlurPassFBO[BLUR_BUFFERS][2];
 extern FBO_Container_t s_BrightAccumFBO;
 extern FBO_Container_t s_ToneMapFBO;
-extern FBO_Container_t s_HUDInWorldFBO;
+extern FBO_Container_t s_DepthLinearFBO;
+extern FBO_Container_t s_HBAOCalcFBO;
 extern FBO_Container_t s_CloakFBO;
 
 extern int skytexturenum;
@@ -136,6 +140,8 @@ extern msurface_t *skychain;
 extern msurface_t *waterchain;
 
 extern int *gSkyTexNumber;
+extern skybox_t *skymins;
+extern skybox_t *skymaxs;
 
 extern cvar_t *r_bmodelinterp;
 extern cvar_t *r_bmodelhighfrac;
@@ -199,6 +205,7 @@ void R_FillAddress(void);
 void R_InstallHook(void);
 void R_RenderView(void);
 void R_RenderScene(void);
+void R_RenderView_SvEngine(int a1);
 qboolean R_CullBox(vec3_t mins, vec3_t maxs);
 void R_RotateForEntity(vec_t *origin, cl_entity_t *e);
 void R_Clear(void);
@@ -213,6 +220,7 @@ void R_FreeTextures(void);
 void R_InitShaders(void);
 void R_FreeShaders(void);
 void R_SetupFrame(void);
+void R_SetFrustum(void);
 void R_SetupGL(void);
 void R_MarkLeaves(void);
 void R_SetFrustum(void);
@@ -266,8 +274,17 @@ void BuildSurfaceDisplayList(msurface_t *fa);
 
 refdef_t *R_GetRefDef(void);
 int R_GetDrawPass(void);
-GLuint R_GLGenTexture(int w, int h);
+GLuint R_GLGenTextureRGBA8(int w, int h);
+
+void R_GLUploadDepthTexture(int texid, int w, int h);
 GLuint R_GLGenDepthTexture(int w, int h);
+
+GLuint R_GLGenTextureColorFormat(int w, int h, int iInternalFormat);
+void R_GLUploadTextureColorFormat(int texid, int w, int h, int iInternalFormat);
+
+GLuint R_GLGenShadowTexture(int w, int h);
+void R_GLUploadShadowTexture(int texid, int w, int h);
+
 byte *R_GetTexLoaderBuffer(int *bufsize);
 gltexture_t *R_GetCurrentGLTexture(void);
 int GL_LoadTextureEx(const char *identifier, GL_TEXTURETYPE textureType, int width, int height, byte *data, qboolean mipmap, qboolean ansio);
@@ -288,24 +305,21 @@ void R_PushRefDef(void);
 void R_UpdateRefDef(void);
 void R_PopRefDef(void);
 float *R_GetSavedViewOrg(void);
-void R_RenderWaterFog(void) ;
-void R_FinalWaterFog(void);
-void R_EndProgram(void);
 int R_GetDrawPass(void);
 int R_GetSupportExtension(void);
 //void R_LoadRendererEntities(void);
 void GL_FreeTexture(gltexture_t *glt);
 void R_InitRefHUD(void);
+void R_PushMatrix(void);
+void R_PopMatrix(void);
 
-//patch engine limitation
-void CL_VisEdicts_Patch(void);
-void Lightmaps_Patch(void);
 //for screenshot
 byte *R_GetSCRCaptureBuffer(int *bufsize);
 void CL_ScreenShot_f(void);
 
 //player state for StudioDrawPlayer
 entity_state_t *R_GetPlayerState(int index);
+entity_state_t *R_GetCurrentDrawPlayerState(int parsecount);
 
 extern vec3_t save_vieworg[MAX_SAVEREFDEF_STACK];
 extern vec3_t save_viewang[MAX_SAVEREFDEF_STACK];
@@ -313,6 +327,3 @@ extern int save_refdefstack;
 
 extern double g_flFrameTime;
 extern int last_luminance;
-
-#define glwidth g_iVideoWidth
-#define glheight g_iVideoHeight

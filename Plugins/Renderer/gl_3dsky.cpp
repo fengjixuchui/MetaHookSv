@@ -3,7 +3,6 @@
 qboolean draw3dsky;
 vec3_t _3dsky_view;
 float _3dsky_mvmatrix[16];
-mplane_t _3dsky_frustum[4];
 
 r_3dsky_parm_t r_3dsky_parm;
 
@@ -100,14 +99,12 @@ void R_Render3DSky(void)
 	qglViewport(0, 0, glwidth, glheight);
 
 	R_ClearSkyBox();
-	R_DrawWorld();
+	//R_DrawWorld();
 
 	R_PopRefDef();
 
 	draw3dsky = false;
 }
-
-#define CURRENT_DRAW_PLAYER_STATE ((entity_state_t *)( (char *)cl_frames + sizeof(frame_t) * (parsecount + sizeof(entity_state_t) * (*currententity)->index) ))
 
 void R_Draw3DSkyEntities(void)
 {
@@ -144,7 +141,7 @@ void R_Draw3DSkyEntities(void)
 				R_Setup3DSkyModel();
 				if ((*currententity)->player)
 				{
-					(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER | STUDIO_EVENTS, CURRENT_DRAW_PLAYER_STATE );
+					(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER | STUDIO_EVENTS, R_GetCurrentDrawPlayerState(parsecount) );
 				}
 				else
 				{
@@ -158,7 +155,7 @@ void R_Draw3DSkyEntities(void)
 
 								if ((*currententity)->player)
 								{
-									(*gpStudioInterface)->StudioDrawPlayer(0, CURRENT_DRAW_PLAYER_STATE );
+									(*gpStudioInterface)->StudioDrawPlayer(0, R_GetCurrentDrawPlayerState(parsecount));
 								}
 								else
 								{
@@ -241,7 +238,7 @@ void R_Draw3DSkyEntities(void)
 		{
 			case mod_brush:
 			{
-				if (*g_bUserFogOn)
+				if (g_bUserFogOn && *g_bUserFogOn)
 				{
 					if ((*currententity)->curstate.rendermode != kRenderGlow && (*currententity)->curstate.rendermode != kRenderTransAdd)
 						qglEnable(GL_FOG);
@@ -277,7 +274,7 @@ void R_Draw3DSkyEntities(void)
 				R_Setup3DSkyModel();
 				if ((*currententity)->player)
 				{
-					(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER | STUDIO_EVENTS, CURRENT_DRAW_PLAYER_STATE );
+					(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER | STUDIO_EVENTS, R_GetCurrentDrawPlayerState(parsecount));
 				}
 				else
 				{
@@ -291,7 +288,7 @@ void R_Draw3DSkyEntities(void)
 
 								if ((*currententity)->player)
 								{
-									(*gpStudioInterface)->StudioDrawPlayer(0, CURRENT_DRAW_PLAYER_STATE );
+									(*gpStudioInterface)->StudioDrawPlayer(0, R_GetCurrentDrawPlayerState(parsecount));
 								}
 								else
 								{

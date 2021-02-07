@@ -115,8 +115,6 @@ ref_export_t gRefExports =
 	//common
 	R_GetDrawPass,
 	R_GetSupportExtension,
-	//water
-	R_SetWaterParm,
 	//studio
 	R_GLStudioDrawPointsEx,
 	R_GetPlayerState,
@@ -130,10 +128,8 @@ ref_export_t gRefExports =
 	R_PushFrameBuffer,
 	R_PopFrameBuffer,
 	R_GLBindFrameBuffer,
-	//shadow
-	R_CreateShadowLight,
 	//texture
-	R_GLGenTexture,
+	R_GLGenTextureRGBA8,
 	R_GetTexLoaderBuffer,
 	R_LoadTextureEx,
 	GL_LoadTextureEx,
@@ -150,20 +146,10 @@ ref_export_t gRefExports =
 	R_Finish3DSkyModel,
 	//2d postprocess
 	R_BeginFXAA,
-	R_BeginDrawRoundRect,
-	R_BeginDrawHudMask,
 	//cloak
 	R_RenderCloakTexture,
 	R_GetCloakTexture,
 	R_BeginRenderConc,
-	//3dhud
-	R_Get3DHUDTexture,
-	R_Draw3DHUDQuad,
-	R_BeginDrawTrianglesInHUD_Direct,
-	R_BeginDrawTrianglesInHUD_FBO,
-	R_FinishDrawTrianglesInHUD,
-	R_BeginDrawHUDInWorld,
-	R_FinishDrawHUDInWorld,
 	//shader
 	ShaderAPI,
 	RefAPI
@@ -179,12 +165,17 @@ void hudGetMousePos(struct tagPOINT *ppt)
 {
 	gEngfuncs.pfnGetMousePos(ppt);
 
-	if ( !g_bWindowed )
+	int iVideoWidth, iVideoHeight, iBPP;
+	bool bWindowed = false;
+
+	g_pMetaHookAPI->GetVideoMode(&iVideoWidth, &iVideoHeight, &iBPP, &bWindowed);
+
+	if ( !bWindowed )
 	{
 		RECT rectWin;
 		GetWindowRect(GetMainHWND(), &rectWin);
-		int videoW = g_iVideoWidth;
-		int videoH = g_iVideoHeight;
+		int videoW = iVideoWidth;
+		int videoH = iVideoHeight;
 		int winW = rectWin.right - rectWin.left;
 		int winH = rectWin.bottom - rectWin.top;
 		ppt->x *= (float)videoW / winW;
@@ -198,12 +189,17 @@ void hudGetMousePosition(int *x, int *y)
 {
 	gEngfuncs.GetMousePosition(x, y);
 
-	if ( !g_bWindowed )
+	int iVideoWidth, iVideoHeight, iBPP;
+	bool bWindowed = false;
+
+	g_pMetaHookAPI->GetVideoMode(&iVideoWidth, &iVideoHeight, &iBPP, &bWindowed);
+
+	if ( !bWindowed )
 	{
 		RECT rectWin;
 		GetWindowRect(GetMainHWND(), &rectWin);
-		int videoW = g_iVideoWidth;
-		int videoH = g_iVideoHeight;
+		int videoW = iVideoWidth;
+		int videoH = iVideoHeight;
 		int winW = rectWin.right - rectWin.left;
 		int winH = rectWin.bottom - rectWin.top;
 		*x *= (float)videoW / winW;
@@ -211,31 +207,6 @@ void hudGetMousePosition(int *x, int *y)
 		*x *= (*windowvideoaspect - 1) * (*x - videoW / 2);
 		*y *= (*videowindowaspect - 1) * (*y - videoH / 2);
 	}
-}
-
-#define METARENDER_SKYCAMERA 1
-#define METARENDER_SHADOWMGR 2
-
-int MsgFunc_MetaRender(const char *pszName, int iSize, void *pbuf)
-{
-	BEGIN_READ(pbuf, iSize);
-
-	int type = READ_BYTE();
-	if(type == METARENDER_SHADOWMGR)
-	{
-		vec3_t angles;
-		angles[0] = READ_COORD();
-		angles[1] = READ_COORD();
-		angles[2] = READ_COORD();
-		float radius = READ_COORD();
-		float fard = READ_COORD();
-		float scale = READ_COORD();
-		int texsize = READ_SHORT();
-		char *affectmodel = READ_STRING();
-		R_CreateShadowManager(affectmodel, angles, radius, fard, scale, texsize);
-	}
-	
-	return 1;
 }
 
 void R_Version_f(void)
@@ -248,10 +219,6 @@ void HUD_Init(void)
 	gExportfuncs.HUD_Init();
 
 	R_Init();
-
-	gEngfuncs.pfnHookUserMsg("MetaRender", MsgFunc_MetaRender);
-
-	cl_righthand = gEngfuncs.pfnGetCvarPointer("cl_righthand");
 
 	gEngfuncs.pfnAddCommand("r_version", R_Version_f);
 }
@@ -277,20 +244,40 @@ void HUD_DrawNormalTriangles(void)
 
 void HUD_DrawTransparentTriangles(void)
 {
-	gExportfuncs.HUD_DrawTransparentTriangles();	
+	if (!drawreflect && !drawrefract && !drawshadow)
+	{
+		R_FreeDeadWaters();
+	}
+
+	gExportfuncs.HUD_DrawTransparentTriangles();
+
+	if (!drawreflect && !drawrefract && !drawshadow)
+	{
+		R_RenderAllShadowScenes();
+
+		for (shadowlight_t *sl = sdlights_active; sl; sl = sl->next)
+		{
+			sl->free = true;
+		}
+
+		for (r_water_t *water = waters_active; water; water = water->next)
+		{
+			water->free = true;
+		}
+	}
 }
 
 int HUD_Redraw(float time, int intermission)
 {
-	if(waters_active && r_water_debug->value > 0 && r_water_debug->value <= 3)
+	if(waters_active && r_water_debug && r_water_debug->value > 0 && r_water_debug->value <= 3)
 	{
 		qglDisable(GL_BLEND);
 		qglDisable(GL_ALPHA_TEST);
-		qglColor4f(1,1,1,1);
+		qglColor4f(1, 1, 1, 1);
 
 		qglEnable(GL_TEXTURE_2D);
 		int debugTextureID = 0;
-		switch((int)r_water_debug->value)
+		switch ((int)r_water_debug->value)
 		{
 		case 1:
 			debugTextureID = waters_active->reflectmap;
@@ -302,28 +289,31 @@ int HUD_Redraw(float time, int intermission)
 			debugTextureID = waters_active->depthrefrmap;
 			qglUseProgramObjectARB(drawdepth.program);
 			break;
+		case 4:
+			debugTextureID = waters_active->depthreflmap;
+			qglUseProgramObjectARB(drawdepth.program);
+			break;
 		default:
 			break;
 		}
-		if(debugTextureID)
+		if (debugTextureID)
 		{
 			qglBindTexture(GL_TEXTURE_2D, debugTextureID);
 			qglBegin(GL_QUADS);
-			qglTexCoord2f(0,1);
-			qglVertex3f(0,0,0);
-			qglTexCoord2f(1,1);
-			qglVertex3f(glwidth/2,0,0);
-			qglTexCoord2f(1,0);
-			qglVertex3f(glwidth/2,glheight/2,0);
-			qglTexCoord2f(0,0);
-			qglVertex3f(0,glheight/2,0);
+			qglTexCoord2f(0, 1);
+			qglVertex3f(0, 0, 0);
+			qglTexCoord2f(1, 1);
+			qglVertex3f(glwidth / 2, 0, 0);
+			qglTexCoord2f(1, 0);
+			qglVertex3f(glwidth / 2, glheight / 2, 0);
+			qglTexCoord2f(0, 0);
+			qglVertex3f(0, glheight / 2, 0);
 			qglEnd();
 
-			if(debugTextureID = waters_active->depthrefrmap)
-				qglUseProgramObjectARB(0);
+			qglUseProgramObjectARB(0);
 		}
 	}
-	else if(sdlights_active && r_shadow_debug->value)
+	else if(sdlights_active && r_shadow_debug && r_shadow_debug->value)
 	{
 		qglDisable(GL_BLEND);
 		qglDisable(GL_ALPHA_TEST);
@@ -331,6 +321,8 @@ int HUD_Redraw(float time, int intermission)
 
 		qglEnable(GL_TEXTURE_2D);
 		qglBindTexture(GL_TEXTURE_2D, sdlights_active->depthmap);
+
+		qglUseProgramObjectARB(drawdepth.program);
 
 		qglBegin(GL_QUADS);
 		qglTexCoord2f(0,1);
@@ -343,8 +335,10 @@ int HUD_Redraw(float time, int intermission)
 		qglVertex3f(0,glheight/2,0);
 		qglEnd();
 		qglEnable(GL_ALPHA_TEST);
+
+		qglUseProgramObjectARB(0);
 	}
-	else if(r_cloak_debug->value)
+	else if(r_cloak_debug && r_cloak_debug->value)
 	{
 		qglDisable(GL_BLEND);
 		qglDisable(GL_ALPHA_TEST);
@@ -365,28 +359,7 @@ int HUD_Redraw(float time, int intermission)
 		qglEnd();
 		qglEnable(GL_ALPHA_TEST);
 	}
-	else if(r_hudinworld_debug->value && r_hudinworld_texture)
-	{
-		qglDisable(GL_BLEND);
-		qglDisable(GL_ALPHA_TEST);
-		qglColor4f(1,1,1,1);
-
-		qglEnable(GL_TEXTURE_2D);
-		qglBindTexture(GL_TEXTURE_2D, r_hudinworld_texture);
-
-		qglBegin(GL_QUADS);
-		qglTexCoord2f(0,1);
-		qglVertex3f(0,0,0);
-		qglTexCoord2f(1,1);
-		qglVertex3f(glwidth/2,0,0);
-		qglTexCoord2f(1,0);
-		qglVertex3f(glwidth/2,glheight/2,0);
-		qglTexCoord2f(0,0);
-		qglVertex3f(0,glheight/2,0);
-		qglEnd();
-		qglEnable(GL_ALPHA_TEST);
-	}
-	else if(r_hdr_debug->value)
+	else if(r_hdr_debug && r_hdr_debug->value)
 	{
 		qglDisable(GL_BLEND);
 		qglDisable(GL_ALPHA_TEST);
@@ -435,6 +408,46 @@ int HUD_Redraw(float time, int intermission)
 			qglTexCoord2f(0,0);
 			qglVertex3f(0, glheight/2,0);
 			qglEnd();
+		}
+	}
+	else if (r_ssao_debug && r_ssao_debug->value)
+	{
+		qglDisable(GL_BLEND);
+		qglDisable(GL_ALPHA_TEST);
+		qglColor4f(1, 1, 1, 1);
+
+		qglEnable(GL_TEXTURE_2D);
+		int texId = 0;
+		switch ((int)r_ssao_debug->value)
+		{	
+		case 1:
+			qglUseProgramObjectARB(drawdepth.program);
+			texId = s_BackBufferFBO.s_hBackBufferDepthTex; break;
+		case 2:
+			texId = s_DepthLinearFBO.s_hBackBufferTex; break;
+		case 3:
+			texId = s_HBAOCalcFBO.s_hBackBufferTex; break;
+		case 4:
+			texId = s_HBAOCalcFBO.s_hBackBufferTex2; break;
+		default:
+			break;
+		}
+
+		if (texId)
+		{
+			qglBindTexture(GL_TEXTURE_2D, texId);
+			qglBegin(GL_QUADS);
+			qglTexCoord2f(0, 1);
+			qglVertex3f(0, 0, 0);
+			qglTexCoord2f(1, 1);
+			qglVertex3f(glwidth / 2, 0, 0);
+			qglTexCoord2f(1, 0);
+			qglVertex3f(glwidth / 2, glheight / 2, 0);
+			qglTexCoord2f(0, 0);
+			qglVertex3f(0, glheight / 2, 0);
+			qglEnd();
+
+			qglUseProgramObjectARB(0);
 		}
 	}
 	return gExportfuncs.HUD_Redraw(time, intermission);
@@ -487,10 +500,10 @@ int HUD_GetStudioModelInterface(int version, struct r_studio_interface_s **ppint
 	gpStudioInterface = ppinterface;
 
 	//InlineHook StudioAPI
-	InstallHook(studioapi_StudioDrawPoints);
-	InstallHook(studioapi_StudioSetupLighting);
-	InstallHook(studioapi_SetupRenderer);
-	InstallHook(studioapi_RestoreRenderer);
+	//InstallHook(studioapi_StudioDrawPoints);
+	//InstallHook(studioapi_StudioSetupLighting);
+	//InstallHook(studioapi_SetupRenderer);
+	//InstallHook(studioapi_RestoreRenderer);
 
 	R_InitDetailTextures();
 	//Load global extra textures into array
@@ -508,10 +521,11 @@ int HUD_UpdateClientData(client_data_t *pcldata, float flTime)
 
 int HUD_AddEntity(int type, cl_entity_t *ent, const char *model)
 {
-	if(r_shadow->value && shadow.program && (ent->curstate.effects & EF_SHADOW))
+	if(r_shadow && r_shadow->value && shadow.program && (type == 0 || type == 1))//NORMAL OR PLAYER
 	{
 		R_AddEntityShadow(ent, model);
 	}
+#if 0
 	if(r_3dsky_parm.enable)
 	{
 		if(ent->curstate.origin[0] + ent->curstate.maxs[0] > r_3dsky_parm.mins[0] && 
@@ -521,12 +535,13 @@ int HUD_AddEntity(int type, cl_entity_t *ent, const char *model)
 			ent->curstate.origin[1] + ent->curstate.mins[1] < r_3dsky_parm.maxs[1] && 
 			ent->curstate.origin[2] + ent->curstate.mins[2] < r_3dsky_parm.maxs[2])
 		{
-			if(!r_3dsky->value)
+			if(!r_3dsky || !r_3dsky->value)
 				return 0;
 
 			R_Add3DSkyEntity(ent);
 		}
 	}
+#endif
 	return gExportfuncs.HUD_AddEntity(type, ent, model);
 }
 

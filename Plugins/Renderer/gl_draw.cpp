@@ -17,15 +17,18 @@ xcommand_t gl_texturemode_function;
 
 float current_ansio = -1.0;
 
-static byte texloader_buffer[2048*2048*4];
-gltexture_t *gltextures;
-int *numgltextures;
-int *gHostSpawnCount;
-int *currenttexid;//for 3xxx~4xxx
-int *currenttexture;
-//for renderer
-gltexture_t *currentglt;
-static byte scaled_buffer[1024*1024*4];
+static byte texloader_buffer[4096 * 4096 * 4];
+static byte scaled_buffer[1024 * 1024 * 4];
+
+gltexture_t *gltextures = NULL;
+gltexture_t **gltextures_SvEngine = NULL;//for SvEngine
+int *maxgltextures_SvEngine = NULL;//for SvEngine
+int *numgltextures = NULL;
+int *gHostSpawnCount = NULL;
+int *currenttexid = NULL;//for 3xxx~4xxx
+int *currenttexture = NULL;
+gltexture_t *currentglt = NULL;
+
 int gl_filter_min = GL_LINEAR_MIPMAP_LINEAR;
 int gl_filter_max = GL_LINEAR;
 
@@ -127,11 +130,9 @@ void Draw_TextureMode_f(void)
 
 void Draw_UpdateAnsios(void)
 {
-	int i;
-
 	if (gl_ansio->value != current_ansio)
 	{
-		for (i = 0; i < 6; i++)
+		for (int i = 0; i < 6; i++)
 		{
 			if (gl_filter_min == modes[i].minimize)
 			{
@@ -149,7 +150,8 @@ void Draw_UpdateAnsios(void)
 void Draw_Init(void)
 {
 	gl_texturemode_function = Cmd_HookCmd("gl_texturemode", Draw_TextureMode_f);
-	Cmd_HookCmd("screenshot", CL_ScreenShot_f);
+	if (!Cmd_HookCmd("screenshot", CL_ScreenShot_f))
+		Cmd_HookCmd("snapshot", CL_ScreenShot_f);
 }
 
 byte *R_GetTexLoaderBuffer(int *bufsize)
@@ -161,143 +163,15 @@ byte *R_GetTexLoaderBuffer(int *bufsize)
 
 //Texture resampler
 
-/*void GL_ResampleTexture(unsigned *in, int inwidth, int inheight, unsigned *out, int outwidth, int outheight)
-{
-	int i, j;
-	unsigned *inrow, *inrow2;
-	unsigned frac, fracstep;
-	unsigned p1[1024], p2[1024];
-	byte *pix1, *pix2, *pix3, *pix4;
-
-	fracstep = inwidth * 0x10000 / outwidth;
-	frac = fracstep >> 2;
-
-	for (i = 0; i < outwidth; i++)
-	{
-		p1[i] = 4 * (frac >> 16);
-		frac += fracstep;
-	}
-
-	frac = 3 * (fracstep >> 2);
-
-	for (i = 0; i < outwidth; i++)
-	{
-		p2[i] = 4 * (frac >> 16);
-		frac += fracstep;
-	}
-
-	for (i = 0; i < outheight; i++, out += outwidth)
-	{
-		inrow = in + inwidth * (int)((i + 0.25) * inheight / outheight);
-		inrow2 = in + inwidth * (int)((i + 0.75) * inheight / outheight);
-
-		frac = fracstep >> 1;
-
-		for (j = 0; j < outwidth; j++)
-		{
-			pix1 = (byte *)inrow + p1[j];
-			pix2 = (byte *)inrow + p2[j];
-			pix3 = (byte *)inrow2 + p1[j];
-			pix4 = (byte *)inrow2 + p2[j];
-			((byte *)(out + j))[0] = (pix1[0] + pix2[0] + pix3[0] + pix4[0]) >> 2;
-			((byte *)(out + j))[1] = (pix1[1] + pix2[1] + pix3[1] + pix4[1]) >> 2;
-			((byte *)(out + j))[2] = (pix1[2] + pix2[2] + pix3[2] + pix4[2]) >> 2;
-			((byte *)(out + j))[3] = (pix1[3] + pix2[3] + pix3[3] + pix4[3]) >> 2;
-		}
-	}
-}
-
-void GL_ResampleTexturePoint(unsigned char *in, int inwidth, int inheight, unsigned char *out, int outwidth, int outheight)
-{
-	int i, j;
-	unsigned ufrac, vfrac;
-	unsigned ufracstep, vfracstep;
-	unsigned char *src, *dest;
-
-	src = in;
-	dest = out;
-	ufracstep = inwidth * 0x10000 / outwidth;
-	vfracstep = inheight * 0x10000 / outheight;
-
-	vfrac = vfracstep >> 2;
-
-	for (i = 0; i < outheight; i++, out += outwidth)
-	{
-		ufrac = ufracstep >> 2;
-
-		for (j = 0; j < outwidth; j++)
-		{
-			*dest = src[ufrac >> 16];
-			ufrac += ufracstep;
-			dest++;
-		}
-
-		vfrac += vfracstep;
-		src += inwidth * (vfrac >> 16);
-		vfrac = vfrac & 0xFFFF;
-	}
-}
-
-void GL_MipMap(byte *in, int width, int height)
-{
-	int i, j;
-	byte *out;
-
-	width <<=2;
-	height >>= 1;
-	out = in;
-
-	for (i = 0; i < height; i++, in += width)
-	{
-		for (j = 0; j < width; j += 8, out += 4, in += 8)
-		{
-			out[0] = (in[0] + in[4] + in[width + 0] + in[width + 4]) >> 2;
-			out[1] = (in[1] + in[5] + in[width + 1] + in[width + 5]) >> 2;
-			out[2] = (in[2] + in[6] + in[width + 2] + in[width + 6]) >> 2;
-			out[3] = (in[3] + in[7] + in[width + 3] + in[width + 7]) >> 2;
-		}
-	}
-}
-
-void ComputeScaledSize(int *wscale, int *hscale, int width, int height)
-{
-	int scaled_width, scaled_height;
-	int max_size;
-
-	max_size = max(128, (int)gl_max_size->value);
-
-	for (scaled_width = 1; scaled_width < width; scaled_width <<= 1) {}
-
-	if (gl_round_down->value > 0 && width < scaled_width && (gl_round_down->value == 1 || (scaled_width - width) > (scaled_width >> (int)gl_round_down->value)))
-		scaled_width >>= 1;
-
-	for (scaled_height = 1; scaled_height < height; scaled_height <<= 1) {}
-
-	if (gl_round_down->value > 0 && height < scaled_height && (gl_round_down->value == 1 || (scaled_height - height) > (scaled_height >> (int)gl_round_down->value)))
-		scaled_height >>= 1;
-
-	if (wscale)
-		*wscale = min(scaled_width >> (int)gl_picmip->value, max_size);
-
-	if (hscale)
-		*hscale = min(scaled_height >> (int)gl_picmip->value, max_size);
-}*/
-
 void GL_Upload32(unsigned int *data, int width, int height, qboolean mipmap, qboolean ansio)
 {
 	int iComponent, iFormat;
-	//int scaled_width, scaled_height;
 
-	//ComputeScaledSize(&scaled_width, &scaled_height, width, height);
-
-	//if (scaled_height * scaled_width > sizeof(scaled_buffer) / 4)
-	//	Sys_ErrorEx("GL_Upload32: Texture is too large!");
-
-	//if(gl_loadtexture_format != GL_RGBA)
-	//	Sys_ErrorEx("GL_Upload32: Only RGBA is supported!");
+	int bbp = 0;
+	g_pMetaHookAPI->GetVideoMode(NULL, NULL, &bbp, NULL);
 
 	iFormat = GL_RGBA;
-	iComponent = (g_iBPP == 16) ? GL_RGB5_A1 : GL_RGBA8;
+	iComponent = (bbp == 16) ? GL_RGB5_A1 : GL_RGBA8;
 
 	qglTexParameterf(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, (mipmap) ? GL_TRUE : GL_FALSE);
 
@@ -327,46 +201,6 @@ void GL_Upload32(unsigned int *data, int width, int height, qboolean mipmap, qbo
 	}
 
 	qglTexImage2D(GL_TEXTURE_2D, 0, iComponent, width, height, 0, iFormat, GL_UNSIGNED_BYTE, data);
-
-	/*if (scaled_width == width && scaled_height == height)
-	{
-		if (!mipmap)
-		{
-			qglTexImage2D(GL_TEXTURE_2D, 0, iComponent, width, height, 0, iFormat, GL_UNSIGNED_BYTE, data);
-			return;
-		}
-
-		memcpy(scaled_buffer, data, width * height * 4);
-	}
-	else
-	{
-		GL_ResampleTexture(data, width, height, (unsigned int *)scaled_buffer, scaled_width, scaled_height);
-	}
-
-	qglTexImage2D(GL_TEXTURE_2D, 0, iComponent, scaled_width, scaled_height, 0, iFormat, GL_UNSIGNED_BYTE, scaled_buffer);*/
-
-	/*if (mipmap)
-	{
-		int miplevel = 0;
-
-		while (scaled_width > 1 || scaled_height > 1)
-		{
-			GL_MipMap((byte *)scaled_buffer, scaled_width, scaled_height);
-
-			scaled_width >>= 1;
-			scaled_height >>= 1;
-
-			if (scaled_width < 1)
-				scaled_width = 1;
-
-			if (scaled_height < 1)
-				scaled_height = 1;
-
-			miplevel++;
-
-			qglTexImage2D(GL_TEXTURE_2D, miplevel, iComponent, scaled_width, scaled_height, 0, iFormat, GL_UNSIGNED_BYTE, scaled_buffer);
-		}
-	}*/
 }
 
 void GL_Upload16(byte *data, int width, int height, qboolean mipmap, int iType, unsigned char *pPal, qboolean ansio)
@@ -519,6 +353,9 @@ int GL_AllocTexture(char *identifier, GL_TEXTURETYPE textureType, int width, int
 
 	glt = NULL;
 
+	if (!gltextures && gltextures_SvEngine)
+		gltextures = *gltextures_SvEngine;
+
 tryagain:
 	if (identifier[0])
 	{
@@ -555,14 +392,28 @@ tryagain:
 
 	if (!glt)
 	{
+		if (maxgltextures_SvEngine)
+		{
+			if ((*numgltextures) + 1 >= (*maxgltextures_SvEngine))
+			{
+				//realloc just like SvEngine does.
+
+				*maxgltextures_SvEngine += 100;
+				*gltextures_SvEngine = (gltexture_t *)gRefFuncs.realloc_SvEngine((void *)(*gltextures_SvEngine), (*maxgltextures_SvEngine) * sizeof(gltexture_t));
+				gltextures = *gltextures_SvEngine;
+			}
+		}
+		else
+		{
+			if ((*numgltextures) + 1 >= MAX_GLTEXTURES)
+			{
+				gEngfuncs.Con_Printf("Texture Overflow: MAX_GLTEXTURES\n");
+				return 0;
+			}
+		}
+
 		glt = &gltextures[(*numgltextures)];
 		(*numgltextures)++;
-
-		if (*numgltextures >= MAX_GLTEXTURES)
-		{
-			gEngfuncs.Con_Printf("Texture Overflow: MAX_GLTEXTURES\n");
-			return 0;
-		}
 	}
 
 	if (!glt->texnum)
@@ -675,20 +526,7 @@ int GL_LoadTextureEx(const char *identifier, GL_TEXTURETYPE textureType, int wid
 		return texnum;
 	}
 
-	//ComputeScaledSize(&scaled_width, &scaled_height, width, height);
-	//rescale = (scaled_width == width && scaled_height == height) ? false : true;
-
-	//pTexture = data;
-	//if (!mipmap && rescale && scaled_width <= 128 && scaled_height <= 128)
-	//{
-	//	GL_ResampleTexturePoint(data, width, height, scaled_buffer, scaled_width, scaled_height);
-	//	pTexture = scaled_buffer;
-	//}
-
-	//if (pTexture)
-	//{
-		GL_Upload32((unsigned *)data, width, height, mipmap, ansio);
-	//}
+	GL_Upload32((unsigned *)data, width, height, mipmap, ansio);
 
 	return texnum;
 }

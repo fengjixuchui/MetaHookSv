@@ -3,7 +3,6 @@
 //renderer
 qboolean drawshadow;
 qboolean drawshadowscene;
-int shadow_update_counter;
 vec3_t shadow_light_mins;
 vec3_t shadow_light_maxs;
 
@@ -13,39 +12,28 @@ shadowlight_t sdlights[MAX_SHADOW_LIGHTS];
 shadowlight_t *sdlights_active = NULL;
 shadowlight_t *sdlights_free = NULL;
 
-shadow_manager_t sdmanagers[MAX_SHADOW_MANAGERS];
-shadow_manager_t sdmanager_player;
-int numsdmanagers;
-
 //shader
 SHADER_DEFINE(shadow);
 
 //cvar
 cvar_t *r_shadow = NULL;
 cvar_t *r_shadow_debug = NULL;
-
-//bug fix
-int g_flPlayerParseCount;
+cvar_t *r_shadow_angle_p = NULL;
+cvar_t *r_shadow_angle_y = NULL;
+cvar_t *r_shadow_angle_r = NULL;
+cvar_t *r_shadow_radius = NULL;
+cvar_t *r_shadow_fardist = NULL;
+cvar_t *r_shadow_scale = NULL;
+cvar_t *r_shadow_texsize = NULL;
+cvar_t *r_shadow_maxdist = NULL;
 
 void R_ClearShadow(void)
 {
-	for(int i = 0; i < MAX_SHADOW_LIGHTS; ++i)
+	for(int i = 0; i < MAX_SHADOW_LIGHTS - 1; ++i)
 		sdlights[i].next = &sdlights[i+1];
 	sdlights[MAX_SHADOW_LIGHTS-1].next = NULL;
 	sdlights_free = &sdlights[0];
 	sdlights_active = NULL;
-
-	memset(sdmanagers, 0, sizeof(sdmanagers));
-	memset(&sdmanager_player, 0, sizeof(sdmanager_player));
-	numsdmanagers = 0;
-
-	sdmanager_player.radius = 256;
-	sdmanager_player.fard = 64;
-	sdmanager_player.scale = 8;
-	sdmanager_player.texsize = 512;
-	sdmanager_player.angles[0] = 90;
-	sdmanager_player.angles[1] = 0;
-	sdmanager_player.angles[2] = 0;
 }
 
 void R_InitShadow(void)
@@ -66,40 +54,36 @@ void R_InitShadow(void)
 				SHADER_UNIFORM(shadow, fard, "fard");
 			}
 		}
+
+		if (!shadow_vscode)
+		{
+			Sys_ErrorEx("shader file \"resource\\shader\\shadow_shader.vsh\" not found!");
+		}
+		if (!shadow_fscode)
+		{
+			Sys_ErrorEx("shader file \"resource\\shader\\shadow_shader.fsh\" not found!");
+		}
 		gEngfuncs.COM_FreeFile((void *)shadow_vscode);
 		gEngfuncs.COM_FreeFile((void *)shadow_fscode);
 	}
 
 	r_shadow = gEngfuncs.pfnRegisterVariable("r_shadow", "1", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
-	r_shadow_debug = gEngfuncs.pfnRegisterVariable("r_shadow_debug", "0", FCVAR_CLIENTDLL);
+	r_shadow_debug = gEngfuncs.pfnRegisterVariable("r_shadow_debug", "0", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+	r_shadow_angle_p = gEngfuncs.pfnRegisterVariable("r_shadow_angle_pitch", "100", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+	r_shadow_angle_y = gEngfuncs.pfnRegisterVariable("r_shadow_angle_yaw", "30", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+	r_shadow_angle_r = gEngfuncs.pfnRegisterVariable("r_shadow_angle_roll", "0", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+	r_shadow_radius = gEngfuncs.pfnRegisterVariable("r_shadow_radius", "512", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+	r_shadow_fardist = gEngfuncs.pfnRegisterVariable("r_shadow_fardist", "64", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+	r_shadow_scale = gEngfuncs.pfnRegisterVariable("r_shadow_scale", "8", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+	r_shadow_texsize = gEngfuncs.pfnRegisterVariable("r_shadow_texsize", "1024", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+	r_shadow_maxdist = gEngfuncs.pfnRegisterVariable("r_shadow_maxdist", "512", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 
-	shadow_update_counter = 0;
 	drawshadow = false;
 	drawshadowscene = false;
 	cursdlight = NULL;
 
 	memset(sdlights, 0, sizeof(sdlights));
 	R_ClearShadow();
-}
-
-void R_GLUploadShadowTexture(int texid, int w, int h)
-{
-	GL_Bind(texid);
-	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
-	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_R_TO_TEXTURE);
-	qglTexParameteri(GL_TEXTURE_2D, GL_DEPTH_TEXTURE_MODE_ARB, GL_INTENSITY);
-	qglTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0, GL_DEPTH_COMPONENT, GL_FLOAT, 0);
-}
-
-GLuint R_GLGenShadowTexture(int w, int h)
-{
-	GLuint texid = GL_GenTexture();
-	R_GLUploadShadowTexture(texid, w, h);
-	return texid;
 }
 
 void R_FreeDeadShadowLights(void)
@@ -153,16 +137,17 @@ void R_AddEntityShadow(cl_entity_t *ent, const char *model)
 {
 	if (!model)
 		return;
+
+	if (!R_ShouldCastShadow(ent))
+		return;
+
 	if(ent->player)
 	{
 		shadowlight_t *sl = R_FindShadowLight(ent);
 		if(!sl)
 		{
-			shadow_manager_t *sm = R_FindPlayerShadowManager();
-			if(sm)
-			{
-				R_CreateShadowLight(ent, sm->angles, sm->radius, sm->fard, sm->scale, sm->texsize);
-			}
+			vec3_t ang = { r_shadow_angle_p->value, r_shadow_angle_y->value, r_shadow_angle_r->value };
+			R_CreateShadowLight(ent, ang, r_shadow_radius->value, r_shadow_fardist->value, (int)r_shadow_scale->value, r_shadow_texsize->value);
 		}
 		else
 		{
@@ -174,16 +159,8 @@ void R_AddEntityShadow(cl_entity_t *ent, const char *model)
 		shadowlight_t *sl = R_FindShadowLight(ent);
 		if(!sl)
 		{
-			shadow_manager_t *sm = R_FindShadowManager(model);
-			if(sm)
-			{
-				R_CreateShadowLight(ent, sm->angles, sm->radius, sm->fard, sm->scale, sm->texsize);
-			}
-			else
-			{
-				vec3_t ang = {90, 0, 0};
-				R_CreateShadowLight(ent, ang, 256, 64, 8, 512);
-			}
+			vec3_t ang = { r_shadow_angle_p->value, r_shadow_angle_y->value, r_shadow_angle_r->value };
+			R_CreateShadowLight(ent, ang, r_shadow_radius->value, r_shadow_fardist->value, (int)r_shadow_scale->value, r_shadow_texsize->value);
 		}
 		else
 		{
@@ -216,41 +193,44 @@ void R_CreateShadowLight(cl_entity_t *entity, vec3_t angles, float radius, float
 	VectorCopy(angles, cursdlight->angles);
 	AngleVectors(angles, cursdlight->vforward, cursdlight->vright, cursdlight->vup);
 
+	int shadow_texture_size = r_shadow_texsize->value;
+
 	int scaled_texsize;
 	for (scaled_texsize = 1; scaled_texsize < texsize; scaled_texsize <<= 1) {}
 	if (gl_round_down->value > 0 && texsize < scaled_texsize && (gl_round_down->value == 1 || (scaled_texsize - texsize) > (scaled_texsize >> (int)gl_round_down->value)))
 		scaled_texsize >>= 1;
 	int max_size = max(128, gl_max_texture_size);
-	if(!s_ShadowFBO.s_hBackBufferFBO && max_size > 512)//glCopyTexImage2D fix
+	if (!s_BackBufferFBO.s_hBackBufferFBO && max_size > 512)//glCopyTexImage2D fix
 		max_size = 512;
-	scaled_texsize = max(min(scaled_texsize >> (int)gl_picmip->value, max_size), 64);
+
+	if (scaled_texsize > max_size)
+		scaled_texsize = max_size;
 
 	cursdlight->radius = min(max(radius, 0), 1000);
 	cursdlight->fard = min(max(fard, 0), cursdlight->radius);
 	cursdlight->scale = min(max(scale, 1), 64);
 	cursdlight->free = false;
+
 	if(!cursdlight->depthmap)
 	{
 		cursdlight->texsize = scaled_texsize;
-		cursdlight->depthmap = R_GLGenShadowTexture(cursdlight->texsize, cursdlight->texsize);
+		cursdlight->depthmap = R_GLGenShadowTexture(scaled_texsize, scaled_texsize);
 	}
 	else
 	{
 		if(scaled_texsize != cursdlight->texsize)
 		{
 			cursdlight->texsize = scaled_texsize;
-			R_GLUploadShadowTexture(cursdlight->depthmap, cursdlight->texsize, cursdlight->texsize);
+			R_GLUploadShadowTexture(cursdlight->depthmap, scaled_texsize, scaled_texsize);
 		}
 	}
 
 	cursdlight = NULL;
 }
 
-#define CURRENT_DRAW_PLAYER_STATE ((entity_state_t *)( (char *)cl_frames + sizeof(frame_t) * parsecount + sizeof(entity_state_t) * (*currententity)->index) )
-
 void R_RenderCurrentEntity(void)
 {
-	int parsecount = (*cl_parsecount) % 63;
+	int parsecount = ((*cl_parsecount) % 63);
 	switch ((*currententity)->model->type)
 	{
 		case mod_brush:
@@ -262,7 +242,7 @@ void R_RenderCurrentEntity(void)
 		{
 			if ((*currententity)->player)
 			{
-				(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER, CURRENT_DRAW_PLAYER_STATE );
+				(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER, R_GetCurrentDrawPlayerState(parsecount));
 			}
 			else
 			{
@@ -290,8 +270,22 @@ void R_RenderShadowMap(void)
 
 	qglMatrixMode(GL_PROJECTION);
 	qglLoadIdentity();
-	int tsize = cursdlight->texsize / cursdlight->scale;
-	qglOrtho(-tsize, tsize, -tsize, tsize, -cursdlight->radius, cursdlight->radius);
+
+	int scaled_texsize = cursdlight->texsize / cursdlight->scale;
+
+	if (cursdlight->followent->model->type == mod_studio)
+	{
+		if (cursdlight->followent->model->maxs[2] > cursdlight->followent->model->mins[2] + 256.0f
+			||
+			cursdlight->followent->model->maxs[1] > cursdlight->followent->model->mins[1] + 256.0f
+			||
+			cursdlight->followent->model->maxs[0] > cursdlight->followent->model->mins[0] + 256.0f)
+		{
+			scaled_texsize *= 2;;
+		}
+	}
+
+	qglOrtho(-scaled_texsize, scaled_texsize, -scaled_texsize, scaled_texsize, -cursdlight->radius, cursdlight->radius);
 
 	qglMatrixMode(GL_MODELVIEW);
 	qglLoadIdentity();
@@ -308,45 +302,83 @@ void R_RenderShadowMap(void)
 
 	qglViewport(0, 0, cursdlight->texsize, cursdlight->texsize);
 
-	if(s_ShadowFBO.s_hBackBufferFBO)
+	if(s_BackBufferFBO.s_hBackBufferFBO)
 		qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, cursdlight->depthmap, 0);
 
+	qglDrawBuffer(GL_DEPTH_ATTACHMENT);
+
 	qglClear(GL_DEPTH_BUFFER_BIT);
+
+	//qglDepthRange(0, 1);
+
+	qglColorMask(0, 0, 0, 0);
+	
 	//render start
 
 	cl_entity_t *curentity = (*currententity);
 	(*currententity) = cursdlight->followent;
-	int iSaveRenderFx = (*currententity)->curstate.renderfx;
-	(*currententity)->curstate.renderfx = kRenderFxShadow;
+	//int iSaveRenderFx = (*currententity)->curstate.renderfx;
+	//(*currententity)->curstate.renderfx = kRenderFxShadow;
 
 	R_RenderCurrentEntity();
 
-	(*currententity)->curstate.renderfx = iSaveRenderFx;
+	//(*currententity)->curstate.renderfx = iSaveRenderFx;
 	(*currententity) = curentity;
 
-	//render end
-	if(!s_ShadowFBO.s_hBackBufferFBO)
+	qglColorMask(1, 1, 1, 1);
+
+	if(!s_BackBufferFBO.s_hBackBufferFBO)
 	{
-		GL_Bind(cursdlight->depthmap);
+		qglBindTexture(GL_TEXTURE_2D, cursdlight->depthmap);
 		qglCopyTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, 0, 0, cursdlight->texsize, cursdlight->texsize, 0);
 	}
 }
 
-qboolean R_ShouldCastShadow(shadowlight_t *sl)
+qboolean R_ShouldCastShadow(cl_entity_t *ent)
 {
-	if(!sl->followent)
+	if(!ent)
 		return false;
-	if(!sl->followent->model)
+
+	if(!ent->model)
 		return false;
-	if(!(sl->followent->curstate.effects & EF_SHADOW))
+
+	if (ent->curstate.effects & EF_NODRAW)
 		return false;
-	if(sl->followent->curstate.rendermode != kRenderNormal)
+
+	if (ent->curstate.rendermode != kRenderNormal)
 		return false;
-	return true;
+
+	if (ent->model->type == mod_studio)
+	{
+		vec3_t dir;
+		VectorSubtract(ent->origin, r_refdef->vieworg, dir);
+		float dist = VectorLength(dir);
+
+		if (dist > r_shadow_maxdist->value)
+			return false;
+
+		return true;
+	}
+	else if (ent->model->type == mod_brush)
+	{
+		if (ent->curstate.movetype == MOVETYPE_BOUNCE || ent->curstate.movetype == MOVETYPE_TOSS)
+			return true;
+
+		return false;
+	}
+
+	return false;
 }
 
-void R_RenderAllShadowMaps(void)
+void R_RenderShadowMaps(void)
 {
+	if(s_BackBufferFBO.s_hBackBufferFBO)
+	{
+		R_PushFrameBuffer();
+		qglBindFramebufferEXT(GL_FRAMEBUFFER, s_BackBufferFBO.s_hBackBufferFBO);
+		qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+	}
+
 	qglColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
 	qglPolygonOffset(1.0f, 4096.0f);
 	qglEnable(GL_POLYGON_OFFSET_FILL);
@@ -356,9 +388,9 @@ void R_RenderAllShadowMaps(void)
 	r_refdef->onlyClientDraws = true;
 	drawshadow = true;
 
-	for(shadowlight_t *sl = sdlights_active; sl; sl = sl->next)
+	for (shadowlight_t *sl = sdlights_active; sl; sl = sl->next)
 	{
-		if(!R_ShouldCastShadow(sl))
+		if (!R_ShouldCastShadow(sl->followent))
 		{
 			sl->free = true;
 			continue;
@@ -377,20 +409,12 @@ void R_RenderAllShadowMaps(void)
 	qglEnable(GL_CULL_FACE);
 	qglDisable(GL_POLYGON_OFFSET_FILL);
 	qglColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-}
 
-void R_UpdateShadow(void)
-{
-	if(s_ShadowFBO.s_hBackBufferFBO)
+	if(s_BackBufferFBO.s_hBackBufferFBO)
 	{
-		R_PushFrameBuffer();
-		qglBindFramebufferEXT(GL_FRAMEBUFFER, s_ShadowFBO.s_hBackBufferFBO);
-	}
-
-	R_RenderAllShadowMaps();
-
-	if(s_ShadowFBO.s_hBackBufferFBO)
-	{
+		qglBindFramebufferEXT(GL_FRAMEBUFFER, s_BackBufferFBO.s_hBackBufferFBO);
+		qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_BackBufferFBO.s_hBackBufferTex, 0);
+		qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s_BackBufferFBO.s_hBackBufferDepthTex, 0);
 		R_PopFrameBuffer();
 	}
 
@@ -524,6 +548,12 @@ void R_RecursiveWorldNodeShadow(mnode_t *node)
 			side = SURF_PLANEBACK;
 		else if (dot > BACKFACE_EPSILON)
 			side = 0;
+
+		if (plane->type == PLANE_Z && side == SURF_PLANEBACK)
+		{
+			
+		}
+		else
 		{
 			for ( ; c; c--, surf++)
 			{
@@ -533,12 +563,13 @@ void R_RecursiveWorldNodeShadow(mnode_t *node)
 				if (!(surf->flags & SURF_UNDERWATER) && ((dot < 0) ^ !!(surf->flags & SURF_PLANEBACK)))
 					continue;
 
-				if(dot2 > cursdlight->radius)
+				if (dot2 > cursdlight->radius)
 					continue;
 
 				if (!(surf->flags & SURF_DRAWTURB) && !(surf->flags & SURF_DRAWSKY))
 				{
-					R_DrawSequentialPolyShadow(surf);
+					if((*currententity)->curstate.rendermode == kRenderNormal)
+						R_DrawSequentialPolyShadow(surf);
 				}
 			}
 		}
@@ -549,8 +580,9 @@ void R_RecursiveWorldNodeShadow(mnode_t *node)
 
 void R_RenderAllShadowScenes(void)
 {
-	if(!r_shadow->value || !shadow.program)
+	if(!r_shadow || !r_shadow->value || !shadow.program)
 		return;
+
 	if(!sdlights_active)
 		return;
 
@@ -590,11 +622,11 @@ void R_RenderAllShadowScenes(void)
 	qglTexGeni(GL_Q, GL_TEXTURE_GEN_MODE, GL_EYE_LINEAR); 
 	qglTexGenfv(GL_Q, GL_EYE_PLANE, planeQ);
 
-	if (gl_polyoffset->value)
+	if (gl_polyoffset && gl_polyoffset->value)
 	{
 		qglEnable(GL_POLYGON_OFFSET_FILL);
 
-		if (gl_ztrick->value)
+		if (gl_ztrick && gl_ztrick->value)
 			qglPolygonOffset(1, gl_polyoffset->value);
 		else
 			qglPolygonOffset(-1, -gl_polyoffset->value);
@@ -602,21 +634,26 @@ void R_RenderAllShadowScenes(void)
 
 	qglDepthMask(GL_FALSE);
 	qglEnable(GL_BLEND);
-	qglBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);	
+	qglBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	qglColor4f(0.1, 0.1, 0.1, 0.5);
 
 	qglUseProgramObjectARB(shadow.program);
 	qglUniform1iARB(shadow.depthmap, 0);
 
+	GL_DisableMultitexture();
+
 	cl_entity_t *curentity = (*currententity);
+	(*currententity) = r_worldentity;
+
 	drawshadowscene = true;
 
-	GL_DisableMultitexture();
+	r_refdef->onlyClientDraws = true;
 
 	for(shadowlight_t *slight = sdlights_active; slight; slight = slight->next)
 	{
 		if(slight->free)
 			continue;
+
 		cursdlight = slight;
 
 		qglUniform1fARB(shadow.texoffset, 1 / cursdlight->texsize);
@@ -624,7 +661,8 @@ void R_RenderAllShadowScenes(void)
 		qglUniform1fARB(shadow.fard, cursdlight->fard);
 		qglUniform3fvARB(shadow.entorigin, 1, cursdlight->origin);
 
-		GL_Bind(cursdlight->depthmap);
+		GL_SelectTexture(TEXTURE0_SGIS);
+		qglBindTexture(GL_TEXTURE_2D, cursdlight->depthmap);
 
 		qglMatrixMode(GL_TEXTURE);
 		qglLoadIdentity();
@@ -642,25 +680,30 @@ void R_RenderAllShadowScenes(void)
 		shadow_light_maxs[1] = cursdlight->origin[1] + cursdlight->radius;
 		shadow_light_maxs[2] = cursdlight->origin[2] + cursdlight->radius;
 
-		(*currententity) = r_worldentity;
 		R_RecursiveWorldNodeShadow(r_worldmodel->nodes);
+
+		cursdlight = NULL;
 	}
+
+	r_refdef->onlyClientDraws = false;
+
 	drawshadowscene = false;
+
 	(*currententity) = curentity;
-	cursdlight = NULL;
 
 	qglUseProgramObjectARB(0);
 
 	qglDepthMask(GL_TRUE);
-	qglDisable(GL_BLEND);
+	//qglDisable(GL_BLEND);
+
 	if (gl_polyoffset->value)
 	{
 		qglDisable(GL_POLYGON_OFFSET_FILL);
 	}
 
 	//Restore texture0
-	GL_SelectTexture(GL_TEXTURE0_ARB);
-	GL_Bind(0);
+	GL_SelectTexture(TEXTURE0_SGIS);
+	qglBindTexture(GL_TEXTURE_2D, 0);
 
 	qglMatrixMode(GL_TEXTURE);
 	qglLoadIdentity();
@@ -673,46 +716,4 @@ void R_RenderAllShadowScenes(void)
 	qglMatrixMode(GL_MODELVIEW);
 
 	GL_EnableMultitexture();
-}
-
-shadow_manager_t *R_FindShadowManager(const char *affectmodel)
-{
-	for(int i = 0; i < numsdmanagers; ++i)
-	{
-		if(!stricmp(affectmodel, sdmanagers[i].affectmodel))
-		{
-			return &sdmanagers[i];
-		}
-	}
-	return NULL;
-}
-
-shadow_manager_t *R_FindPlayerShadowManager(void)
-{
-	return &sdmanager_player;
-}
-
-void R_CreateShadowManager(char *affectmodel, vec3_t angles, float radius, float fard, float scale, int texsize)
-{
-	shadow_manager_t *sm;
-	if(!stricmp(affectmodel, "player"))
-	{
-		sm = &sdmanager_player;
-	}
-	else
-	{
-		if(numsdmanagers >= MAX_SHADOW_MANAGERS)
-		{
-			gEngfuncs.Con_DPrintf("R_CreateShadowManager: Overflow %d shadow managers!\n", MAX_SHADOW_MANAGERS);
-			return;
-		}
-		sm = &sdmanagers[numsdmanagers];
-	}
-	strcpy(sm->affectmodel, affectmodel);
-	VectorCopy(angles, sm->angles);
-	sm->radius = radius;
-	sm->fard = fard;
-	sm->scale = scale;
-	sm->texsize = texsize;
-	numsdmanagers ++;
 }

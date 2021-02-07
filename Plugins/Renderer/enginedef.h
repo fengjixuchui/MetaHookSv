@@ -58,8 +58,11 @@ typedef struct FBO_Container_s
 	GLuint s_hBackBufferCB;
 	GLuint s_hBackBufferDB;
 	GLuint s_hBackBufferTex;
+	GLuint s_hBackBufferTex2;
+	GLuint s_hBackBufferDepthTex;
 	int iWidth;
 	int iHeight;
+	int iTextureColorFormat;
 }FBO_Container_t;
 
 #define MAX_CLIENTS 32

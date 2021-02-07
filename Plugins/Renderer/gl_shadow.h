@@ -13,7 +13,6 @@ typedef struct sdlight_s
 	float fard;
 	float scale;	
 	int texsize;
-
 	int depthmap;
 	float projmatrix[16];
 	float mvmatrix[16];
@@ -47,7 +46,6 @@ typedef struct
 //renderer 
 extern qboolean drawshadow;
 extern qboolean drawshadowscene;
-extern int shadow_update_counter;
 extern vec3_t shadow_light_mins;
 extern vec3_t shadow_light_maxs;
 
@@ -70,20 +68,23 @@ extern vec3_t shadow_light_maxs;
 //cvar
 extern cvar_t *r_shadow;
 extern cvar_t *r_shadow_debug;
+extern cvar_t *r_shadow_angle_p;
+extern cvar_t *r_shadow_angle_y;
+extern cvar_t *r_shadow_angle_r;
+extern cvar_t *r_shadow_radius;
+extern cvar_t *r_shadow_fardist;
+extern cvar_t *r_shadow_scale;
+extern cvar_t *r_shadow_texsize;
+extern cvar_t *r_shadow_maxdist;
 
-void R_UpdateShadow(void);
+void R_RenderShadowMaps(void);
 void R_InitShadow(void);
 void R_ClearShadow(void);
 void R_RecursiveWorldNodeShadow(mnode_t *node);
 void R_RenderAllShadowScenes(void);
-
 void R_AddEntityShadow(cl_entity_t *ent, const char *model);
+qboolean R_ShouldCastShadow(cl_entity_t *ent);
 
 //Shadow Light
 shadowlight_t *R_FindShadowLight(cl_entity_t *entity);
-void R_CreateShadowLight(cl_entity_t *entity, vec3_t ang, float radius, float fard, float scale, int texscale);
-
-//Shadow Manager
-shadow_manager_t *R_FindShadowManager(const char *affectmodel);
-shadow_manager_t *R_FindPlayerShadowManager(void);
-void R_CreateShadowManager(char *affectmodel, vec3_t angles, float radius, float fard, float scale, int texsize);
+void R_CreateShadowLight(cl_entity_t *entity, vec3_t angles, float radius, float fard, float scale, int texsize);

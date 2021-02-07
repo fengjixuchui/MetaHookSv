@@ -67,13 +67,14 @@
       <DisableSpecificWarnings>4311;4312;4819;4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>.\SourceSDK\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>.\SourceSDK\lib;.\Steam\;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <TargetMachine>MachineX86</TargetMachine>
+      <AdditionalDependencies>steam_api.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>copy $(OutDir)$(ProjectName).dll I:\SteamLibrary\steamapps\common\Half-Life\valve\metahook\plugins\</Command>
+      <Command>copy $(OutDir)$(ProjectName).dll "I:\SteamLibrary\steamapps\common\Sven Co-op\svencoop\metahook\plugins\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -89,15 +90,15 @@
       <DisableSpecificWarnings>4311;4312;4819;4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>.\SourceSDK\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>.\SourceSDK\lib;.\Steam\;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <SubSystem>Windows</SubSystem>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <TargetMachine>MachineX86</TargetMachine>
+      <AdditionalDependencies>steam_api.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>
-      </Command>
+      <Command>copy $(OutDir)$(ProjectName).dll "$(OutDir)..\..\..\Build\svencoop\metahook\plugins\$(ProjectName).dll"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -162,7 +163,6 @@
     <ClCompile Include="SourceSDK\VPanelWrapper.cpp" />
     <ClCompile Include="SourceSDK\vstdlib\KeyValuesSystem.cpp" />
     <ClCompile Include="SourceSDK\vstdlib\random.cpp" />
-    <ClCompile Include="steam_api.cpp" />
     <ClCompile Include="SubtitlePanel.cpp" />
     <ClCompile Include="SurfaceHook.cpp">
       <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(IntDir)%(Filename)1.obj</ObjectFileName>

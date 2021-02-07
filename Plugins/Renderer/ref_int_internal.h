@@ -17,31 +17,18 @@ typedef struct
 
 typedef struct refdef_s
 {
-	vrect_t vrect;
-	vrect_t aliasvrect;
-	int vrectright;
-	int vrectbottom;
-	int aliasvrectright;
-	int aliasvrectbottom;
-	float vrectrightedge;
-	float fvrectx;
-	float fvrecty;
-	float fvrectx_adj;
-	float fvrecty_adj;
-	int vrect_x_adj_shift20;
-	int vrectright_adj_shift20;
-	float fvrectright_adj;
-	float fvrectbottom_adj;
-	float fvrectright;
-	float fvrectbottom;
-	float horizontalFieldOfView;
-	float xOrigin;
-	float yOrigin;
 	vec3_t vieworg;
 	vec3_t viewangles;
 	color24 ambientlight;
 	qboolean onlyClientDraws;
+	qboolean useCamera;
+	vec3_t r_camera_origin;
 }refdef_t;
+
+typedef struct skybox_s
+{
+	float v[2][6];
+}skybox_t;
 
 typedef struct msurface_s msurface_t;
 
@@ -50,6 +37,7 @@ typedef struct
 	void (*R_Clear)(void);
 	void (*R_ForceCVars)(qboolean mp);
 	void (*R_RenderView)(void);
+	void(*R_RenderView_SvEngine)(int a1);
 	void (*R_RenderScene)(void);
 	void (*R_NewMap)(void);
 	void (*R_DrawEntitiesOnList)(void);
@@ -93,6 +81,8 @@ typedef struct
 	void (*R_GetSpriteAxes)(cl_entity_t *entity, int type, float *vforwrad, float *vright, float *vup);
 	void (*R_SpriteColor)(mcolor24_t *col, cl_entity_t *entity, int renderamt);
 	void (*VID_UpdateWindowVars)(RECT *prc, int x, int y);
+	mleaf_t *(*Mod_PointInLeaf)(vec3_t p, model_t *model);
+	void *(*realloc_SvEngine)(void *, size_t);
 
 	//Engine Studio
 	void (*R_GLStudioDrawPoints)(void);
@@ -154,8 +144,6 @@ typedef struct
 	//common
 	int (*R_GetDrawPass)(void);
 	int (*R_GetSupportExtension)(void);
-	//water
-	void (*R_SetWaterParm)(water_parm_t *parm);
 	//studio
 	void (*R_GLStudioDrawPointsEx)(void);
 	entity_state_t *(*R_GetPlayerState)(int index);
@@ -169,10 +157,8 @@ typedef struct
 	void (*R_PushFrameBuffer)(void);
 	void (*R_PopFrameBuffer)(void);
 	void (*R_GLBindFrameBuffer)(GLenum target, GLuint framebuffer);
-	//shadow
-	void (*R_CreateShadowLight)(cl_entity_t *entity, vec3_t angles, float radius, float fard, float scale, int texscale);
 	//texture
-	GLuint (*R_GLGenTexture)(int w, int h);
+	GLuint (*R_GLGenTextureRGBA8)(int w, int h);
 	byte *(*R_GetTexLoaderBuffer)(int *bufsize);
 	int (*R_LoadTextureEx)(const char *filepath, const char *name, int *width, int *height, GL_TEXTURETYPE type, qboolean mipmap, qboolean ansio);
 	int (*GL_LoadTextureEx)(const char *identifier, GL_TEXTURETYPE textureType, int width, int height, byte *data, qboolean mipmap, qboolean ansio);
@@ -189,20 +175,10 @@ typedef struct
 	void (*R_Finish3DSkyModel)(void);
 	//2d postprocess
 	void (*R_BeginFXAA)(int w, int h);
-	void (*R_BeginDrawRoundRect)(int centerX, int centerY, float radius, float blurdist);
-	void (*R_BeginDrawHudMask)(int r, int g, int b);
 	//cloak
 	void (*R_RenderCloakTexture)(void);
 	int (*R_GetCloakTexture)(void);
 	void (*R_BeginRenderConc)(float flBlurFactor, float flRefractFactor);
-	//3dhud
-	int (*R_Get3DHUDTexture)(void);
-	void (*R_Draw3DHUDQuad)(int x, int y, int left, int top);
-	void (*R_BeginDrawTrianglesInHUD_Direct)(int x, int y);
-	void (*R_BeginDrawTrianglesInHUD_FBO)(int x, int y, int left, int top);
-	void (*R_FinishDrawTrianglesInHUD)(void);
-	void (*R_BeginDrawHUDInWorld)(int texid, int w, int h);
-	void (*R_FinishDrawHUDInWorld)(void);
 	//shader
 	shaderapi_t ShaderAPI;
 	engrefapi_t RefAPI;
@@ -234,4 +210,4 @@ enum
 	kRenderFxInvulnLayer
 };
 
-#define META_RENDERER_VERSION "Meta Renderer 1.5"
+#define META_RENDERER_VERSION "Meta Renderer 3.0"

@@ -31,23 +31,27 @@ void R_RecursiveWorldNode(mnode_t *node)
 	gRefFuncs.R_RecursiveWorldNode(node);
 }
 
-void R_DrawWorld(void)
-{
-	if(r_water->value && !R_GetDrawPass() && *cl_waterlevel > 2)
-	{
-		R_RenderWaterFog();
-	}
-
-	gRefFuncs.R_DrawWorld();
-
-	R_FinalWaterFog();
-
-	R_RenderAllShadowScenes();
-}
-
 void R_MarkLeaves(void)
 {
+	//Don't clip bsp nodes when rendering refract or reflect view for non-transparent water.
+	if (r_water_novis && r_water_novis->value > 0)
+	{
+		if (drawrefract)
+		{
+			if (curwater && curwater->color.a == 255)
+			{
+				r_novis->value = 1;
+			}
+		}
+		else if (drawreflect)
+		{
+			r_novis->value = 1;
+		}
+	}
+
 	gRefFuncs.R_MarkLeaves();
+
+	r_novis->value = 0;
 }
 
 void R_UploadLightmaps(void)

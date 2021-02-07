@@ -13,30 +13,14 @@ IFileSystem *g_pFileSystem;
 HINSTANCE g_hInstance, g_hThisModule, g_hEngineModule;
 DWORD g_dwEngineBase, g_dwEngineSize;
 DWORD g_dwEngineBuildnum;
-DWORD g_iVideoMode;
-int g_iVideoWidth, g_iVideoHeight, g_iBPP;
-
-#pragma pack(1)
-bool g_bWindowed;
-bool g_bIsNewEngine;
-bool g_bIsUseSteam;
-bool g_bIsDebuggerPresent;
-#pragma pack()
+int g_iEngineType;
 
 void IPlugins::Init(metahook_api_t *pAPI, mh_interface_t *pInterface, mh_enginesave_t *pSave)
 {
-	BOOL (*IsDebuggerPresent)(void) = (BOOL (*)(void))GetProcAddress(GetModuleHandle("kernel32.dll"), "IsDebuggerPresent");
-
 	g_pInterface = pInterface;
 	g_pMetaHookAPI = pAPI;
 	g_pMetaSave = pSave;
 	g_hInstance = GetModuleHandle(NULL);
-	g_bIsDebuggerPresent = IsDebuggerPresent() != FALSE;
-
-	//TODO: D3D Support
-	//g_pInterface->CommandLine->RemoveParm("-d3d");
-	//g_pInterface->CommandLine->AppendParm("-gl", NULL);
-	//g_pInterface->CommandLine->AppendParm("-32bpp", NULL);
 }
 
 void IPlugins::Shutdown(void)
@@ -45,10 +29,20 @@ void IPlugins::Shutdown(void)
 
 void IPlugins::LoadEngine(void)
 {
-	g_pFileSystem = g_pInterface->FileSystem;
-	g_iVideoMode = g_pMetaHookAPI->GetVideoMode(&g_iVideoWidth, &g_iVideoHeight, &g_iBPP, &g_bWindowed);
-	g_dwEngineBuildnum = g_pMetaHookAPI->GetEngineBuildnum();
+	int iVideoMode = g_pMetaHookAPI->GetVideoMode(NULL, NULL, NULL, NULL);
 
+	if (iVideoMode == 2)
+	{
+		Sys_ErrorEx("D3D mode is not supported.");
+	}
+	if (iVideoMode == 0)
+	{
+		Sys_ErrorEx("Software mode is not supported.");
+	}
+
+	g_pFileSystem = g_pInterface->FileSystem;	
+	g_iEngineType = g_pMetaHookAPI->GetEngineType();
+	g_dwEngineBuildnum = g_pMetaHookAPI->GetEngineBuildnum();
 	g_hEngineModule = g_pMetaHookAPI->GetEngineModule();
 	g_dwEngineBase = g_pMetaHookAPI->GetEngineBase();
 	g_dwEngineSize = g_pMetaHookAPI->GetEngineSize();
@@ -60,12 +54,23 @@ void IPlugins::LoadEngine(void)
 
 void IPlugins::LoadClient(cl_exportfuncs_t *pExportFunc)
 {
+	int iVideoMode = g_pMetaHookAPI->GetVideoMode(&glwidth, &glheight, NULL, NULL);
+
+	if (iVideoMode == 2)
+	{
+		Sys_ErrorEx("D3D mode is not supported.");
+	}
+	if (iVideoMode == 0)
+	{
+		Sys_ErrorEx("Software mode is not supported.");
+	}
+
 	memcpy(&gExportfuncs, pExportFunc, sizeof(gExportfuncs));
 	memcpy(&gEngfuncs, g_pMetaSave->pEngineFuncs, sizeof(gEngfuncs));
 
 	Cmd_GetCmdBase = *(cmd_function_t *(**)(void))((DWORD)g_pMetaSave->pEngineFuncs + 0x198);
 
-	if(g_dwEngineBuildnum < 5953)
+	if(g_iEngineType != ENGINE_SVENGINE && g_dwEngineBuildnum < 5953)
 	{
 		g_pMetaHookAPI->InlineHook(gEngfuncs.pfnGetMousePos, hudGetMousePos, (void *&)gEngfuncs.pfnGetMousePos);
 		g_pMetaHookAPI->InlineHook(gEngfuncs.GetMousePosition, hudGetMousePosition, (void *&)gEngfuncs.GetMousePosition);
@@ -80,6 +85,8 @@ void IPlugins::LoadClient(cl_exportfuncs_t *pExportFunc)
 	pExportFunc->HUD_Init = HUD_Init;
 	pExportFunc->HUD_VidInit = HUD_VidInit;
 	pExportFunc->V_CalcRefdef = V_CalcRefdef;
+	pExportFunc->HUD_DrawNormalTriangles = HUD_DrawNormalTriangles;
+	pExportFunc->HUD_DrawTransparentTriangles = HUD_DrawTransparentTriangles;
 }
 
 void IPlugins::ExitGame(int iResult)

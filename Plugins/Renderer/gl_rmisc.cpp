@@ -22,6 +22,24 @@ void R_PopFrameBuffer(void)
 	}
 }
 
+void R_PushMatrix(void)
+{
+	qglMatrixMode(GL_PROJECTION);
+	qglPushMatrix();
+
+	qglMatrixMode(GL_MODELVIEW);
+	qglPushMatrix();
+}
+
+void R_PopMatrix(void)
+{
+	qglMatrixMode(GL_PROJECTION);
+	qglPopMatrix();
+
+	qglMatrixMode(GL_MODELVIEW);
+	qglPopMatrix();
+}
+
 void R_GLBindFrameBuffer(GLenum target, GLuint framebuffer)
 {
 	if(gl_framebuffer_object)
@@ -30,27 +48,69 @@ void R_GLBindFrameBuffer(GLenum target, GLuint framebuffer)
 	}
 }
 
-GLuint R_GLGenTexture(int w, int h)
+void R_GLUploadTextureColorFormat(int texid, int w, int h, int iInternalFormat)
 {
-	GLuint texid = GL_GenTexture();
-	GL_Bind(texid);
+	qglBindTexture(GL_TEXTURE_2D, texid);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+
+	//glTexStorage2D doesnt work with qglCopyTexImage2D so we use glTexImage2D here
+	qglTexImage2D(GL_TEXTURE_2D, 0, iInternalFormat, w, h, 0, GL_RGBA,
+		(iInternalFormat != GL_RGBA && iInternalFormat != GL_RGBA8) ? GL_FLOAT : GL_UNSIGNED_BYTE, 0);
+
+	qglBindTexture(GL_TEXTURE_2D, 0);
+}
+
+GLuint R_GLGenTextureColorFormat(int w, int h, int iInternalFormat)
+{
+	GLuint texid = GL_GenTexture();
+	R_GLUploadTextureColorFormat(texid, w, h, iInternalFormat);
 	return texid;
+}
+
+GLuint R_GLGenTextureRGBA8(int w, int h)
+{
+	return R_GLGenTextureColorFormat(w, h, GL_RGBA8);
+}
+
+void R_GLUploadDepthTexture(int texId, int w, int h)
+{
+	qglBindTexture(GL_TEXTURE_2D, texId);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	//glTexStorage2D doesnt work with qglCopyTexImage2D so we use glTexImage2D here
+	qglTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0, GL_DEPTH_COMPONENT, GL_FLOAT, 0);
+	qglBindTexture(GL_TEXTURE_2D, 0);
 }
 
 GLuint R_GLGenDepthTexture(int w, int h)
 {
 	GLuint texid = GL_GenTexture();
-	GL_Bind(texid);
+	R_GLUploadDepthTexture(texid, w, h);
+	return texid;
+}
+
+void R_GLUploadShadowTexture(int texid, int w, int h)
+{
+	qglBindTexture(GL_TEXTURE_2D, texid);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_R_TO_TEXTURE);
+	qglTexParameteri(GL_TEXTURE_2D, GL_DEPTH_TEXTURE_MODE_ARB, GL_INTENSITY);
 	qglTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0, GL_DEPTH_COMPONENT, GL_FLOAT, 0);
+}
+
+GLuint R_GLGenShadowTexture(int w, int h)
+{
+	GLuint texid = GL_GenTexture();
+	R_GLUploadShadowTexture(texid, w, h);
 	return texid;
 }
 
@@ -58,7 +118,7 @@ void R_PushRefDef(void)
 {
 	if(save_refdefstack == MAX_SAVEREFDEF_STACK)
 	{
-		gEngfuncs.Con_Printf("R_PushRefDef: MAX_SAVEREFDEF_STACK exceed\n");
+		Sys_ErrorEx("R_PushRefDef: MAX_SAVEREFDEF_STACK exceed\n");
 		return;
 	}
 	VectorCopy(r_refdef->vieworg, save_vieworg[save_refdefstack]);
@@ -81,7 +141,7 @@ void R_PopRefDef(void)
 {
 	if(save_refdefstack == 0)
 	{
-		gEngfuncs.Con_Printf("R_PushRefDef: no refdef is pushed\n");
+		Sys_ErrorEx("R_PushRefDef: no refdef is pushed\n");
 		return;
 	}
 	-- save_refdefstack;
@@ -110,29 +170,8 @@ void R_FreeTextures(void)
 
 void R_NewMap(void)
 {
-	int i;
-
 	r_worldentity = gEngfuncs.GetEntityByIndex(0);
 	r_worldmodel = r_worldentity->model;
-
-	GL_BuildLightmaps();
-
-	skytexturenum = -1;
-	mirrortexturenum = -1;
-	
-	for (i = 0; i < r_worldmodel->numtextures; i++)
-	{
-		if (!r_worldmodel->textures[i])
-			continue;
-
-		if (!strncmp(r_worldmodel->textures[i]->name, "sky", 3))
-			skytexturenum = i;
-
-		if (!strncmp(r_worldmodel->textures[i]->name, "window02_1", 10))
-			mirrortexturenum = i;
-
- 		r_worldmodel->textures[i]->texturechain = NULL;
-	}
 
 	gRefFuncs.R_NewMap();
 
@@ -149,6 +188,21 @@ mleaf_t *Mod_PointInLeaf(vec3_t p, model_t *model)
 		Sys_ErrorEx("Mod_PointInLeaf: bad model");
 
 	node = model->nodes;
+
+	//Don't clip bsp nodes when rendering refract or reflect view for non-transparent water.
+	/*if (drawrefract)
+	{
+		if (curwater && curwater->color.a == 255)
+		{
+			if (node->contents < 0)
+				return (mleaf_t *)node;
+		}
+	}
+	else if (drawreflect)
+	{
+		if (node->contents < 0)
+			return (mleaf_t *)node;
+	}*/
 
 	while (1)
 	{
