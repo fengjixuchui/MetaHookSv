@@ -17,6 +17,8 @@
 #include <sequence.h>
 #include <regex>
 
+#define HUDMESSAGE_MAXLENGTH 2048
+
 class SubtitlePanel;
 class CHudMessage;
 class ISchemel;
@@ -79,7 +81,7 @@ class CViewport : public vgui::Panel
 
 public:
 	CViewport(void);
-	~CViewport(void);
+	virtual ~CViewport(void);
 
 public:
 	//ClientVGUI Interface
@@ -105,9 +107,6 @@ public:
 	void EmptyDictionaryHash(void);
 	void AddDictionaryHash(CDictionary *dict, const char *value);
 	void RemoveDictionaryHash(CDictionary *dict, const char *value);
-
-public:
-	CHudMessage	*m_pHudMessage;
 
 private:
 	SubtitlePanel *m_pSubtitle;

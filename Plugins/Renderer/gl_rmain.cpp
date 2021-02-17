@@ -1,5 +1,6 @@
 #include "gl_local.h"
 #include "cJSON.h"
+#include "pm_defs.h"
 
 ref_funcs_t gRefFuncs;
 
@@ -11,8 +12,6 @@ float gldepthmin, gldepthmax;
 
 cl_entity_t *r_worldentity;
 model_t *r_worldmodel;
-int *cl_numvisedicts;
-int cl_maxvisedicts;
 
 RECT *window_rect;
 
@@ -21,17 +20,16 @@ float *windowvideoaspect;
 float videowindowaspect_old;
 float windowvideoaspect_old;
 
-cl_entity_t **cl_visedicts_old;
-cl_entity_t **cl_visedicts_new;
+int *cl_numvisedicts;
+cl_entity_t **cl_visedicts;
 cl_entity_t **currententity;
 int *numTransObjs;
 int *maxTransObjs;
 transObjRef **transObjects;
-GLuint drawframebuffer;
-GLuint readframebuffer;
 
 float scr_fov_value;
 
+mplane_t custom_frustum[4];
 mplane_t *frustum;
 mleaf_t **r_viewleaf, **r_oldviewleaf;
 texture_t *r_notexture_mip;
@@ -77,6 +75,7 @@ int gl_msaa_samples = 0;
 
 int *gl_msaa_fbo = 0;
 int *gl_backbuffer_fbo = 0;
+qboolean *mtexenabled = 0;
 
 int glx = 0;
 int gly = 0;
@@ -84,8 +83,8 @@ int glwidth = 0;
 int glheight = 0;
 
 FBO_Container_t s_MSAAFBO;
+FBO_Container_t s_GBufferFBO;
 FBO_Container_t s_BackBufferFBO;
-FBO_Container_t s_BackBufferFBO2;
 FBO_Container_t s_DownSampleFBO[DOWNSAMPLE_BUFFERS];
 FBO_Container_t s_LuminFBO[LUMIN_BUFFERS];
 FBO_Container_t s_Lumin1x1FBO[LUMIN1x1_BUFFERS];
@@ -96,6 +95,8 @@ FBO_Container_t s_ToneMapFBO;
 FBO_Container_t s_DepthLinearFBO;
 FBO_Container_t s_HBAOCalcFBO;
 FBO_Container_t s_CloakFBO;
+FBO_Container_t s_ShadowFBO;
+FBO_Container_t s_WaterFBO;
 
 qboolean bDoMSAAFBO = true;
 qboolean bDoScaledFBO = true;
@@ -166,21 +167,12 @@ cvar_t *v_gamma = NULL;
 
 cvar_t *cl_righthand = NULL;
 
-refdef_t *R_GetRefDef(void)
-{
-	return r_refdef;
-}
-
 int R_GetDrawPass(void)
 {
 	if(drawreflect)
 		return r_draw_reflect;
 	if(drawrefract)
 		return r_draw_refract;
-	if(drawshadow)
-		return r_draw_shadow;
-	if(drawshadowscene)
-		return r_draw_shadowscene;
 	if(draw3dsky)
 		return r_draw_3dsky;
 	return r_draw_normal;
@@ -206,9 +198,6 @@ int R_GetSupportExtension(void)
 
 qboolean R_CullBox(vec3_t mins, vec3_t maxs)
 {
-	if(drawshadow)
-		return false;
-
 	if(draw3dsky)
 		return false;
 
@@ -217,15 +206,64 @@ qboolean R_CullBox(vec3_t mins, vec3_t maxs)
 
 void R_RotateForEntity(vec_t *origin, cl_entity_t *e)
 {
+	int i;
+	vec3_t angles;
+	vec3_t modelpos;
+
+	VectorCopy(origin, modelpos);
+	VectorCopy(e->angles, angles);
+
+	if (e->curstate.movetype != MOVETYPE_NONE)
+	{
+		float f;
+		float d;
+
+		if (e->curstate.animtime + 0.2f > (*cl_time) && e->curstate.animtime != e->latched.prevanimtime)
+		{
+			f = ((*cl_time) - e->curstate.animtime) / (e->curstate.animtime - e->latched.prevanimtime);
+		}
+		else
+		{
+			f = 0;
+		}
+
+		for (i = 0; i < 3; i++)
+		{
+			modelpos[i] -= (e->latched.prevorigin[i] - e->origin[i]) * f;
+		}
+
+		if (f != 0.0f && f < 1.5f)
+		{
+			f = 1.0f - f;
+
+			for (i = 0; i < 3; i++)
+			{
+				d = e->latched.prevangles[i] - e->angles[i];
+
+				if (d > 180.0)
+					d -= 360.0;
+				else if (d < -180.0)
+					d += 360.0;
+
+				angles[i] += d * f;
+			}
+		}
+	}
+
+	qglTranslatef(modelpos[0], modelpos[1], modelpos[2]);
+
+	qglRotatef(angles[1], 0, 0, 1);
+	qglRotatef(angles[0], 0, 1, 0);
+	qglRotatef(angles[2], 1, 0, 0);
 }
 
 void R_DrawSpriteModel(cl_entity_t *entity)
 {
-	R_Setup3DSkyModel();
+	R_SetGBufferRenderState(1);
 
 	gRefFuncs.R_DrawSpriteModel(entity);
 
-	R_Finish3DSkyModel();
+	R_SetGBufferRenderState(2);
 }
 
 void R_GetSpriteAxes(cl_entity_t *entity, int type, float *vforwrad, float *vright, float *vup)
@@ -240,7 +278,38 @@ void R_SpriteColor(mcolor24_t *col, cl_entity_t *entity, int renderamt)
 
 float GlowBlend(cl_entity_t *entity)
 {
-	return gRefFuncs.GlowBlend(entity);
+	if(gRefFuncs.GlowBlend)
+		return gRefFuncs.GlowBlend(entity);
+
+	vec3_t tmp;
+	float dist, brightness;
+
+	VectorSubtract(r_entorigin, r_origin, tmp);
+	dist = VectorLength(tmp);
+
+	auto trace = gEngfuncs.PM_TraceLine(r_origin, r_entorigin, r_traceglow->value ? PM_GLASS_IGNORE : (PM_GLASS_IGNORE | PM_STUDIO_IGNORE), 2, -1);
+
+	if ((1.0 - trace->fraction) * dist > 8)
+		return 0;
+
+	if (entity->curstate.renderfx == kRenderFxNoDissipation)
+	{
+		return (float)entity->curstate.renderamt * (1.0f / 255.0f);
+	}
+
+	brightness = 19000 / (dist * dist);
+
+	if (brightness < 0.05)
+	{
+		brightness = 0.05;
+	}
+	else if (brightness > 1.0)
+	{
+		brightness = 1.0;
+	}
+
+	entity->curstate.scale = dist * (1.0 / 200.0);
+	return brightness;
 }
 
 int CL_FxBlend(cl_entity_t *entity)
@@ -337,40 +406,84 @@ void R_AddTEntity(cl_entity_t *pEnt)
 
 entity_state_t *R_GetPlayerState(int index)
 {
-	return (entity_state_t *)( (char *)cl_frames + size_of_frame * ((*cl_parsecount) % 63) + sizeof(entity_state_t) * index );
+	return ((entity_state_t *)((char *)cl_frames + size_of_frame * ((*cl_parsecount) & 63) + sizeof(entity_state_t) * index));
 }
 
-entity_state_t *R_GetCurrentDrawPlayerState(int parsecount)
+void R_DrawCurrentEntity(void)
 {
-	return ((entity_state_t *)((char *)cl_frames + size_of_frame * parsecount + sizeof(entity_state_t) * (*currententity)->index));
+	switch ((*currententity)->model->type)
+	{
+	case mod_brush:
+	{
+		R_DrawBrushModel((*currententity));
+		break;
+	}
+	case mod_studio:
+	{
+		if ((*currententity)->player)
+		{
+			(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER, R_GetPlayerState((*currententity)->index));
+		}
+		else
+		{
+			if ((*currententity)->curstate.movetype == MOVETYPE_FOLLOW)
+			{
+				for (int j = 0; j < (*cl_numvisedicts); j++)
+				{
+					if (cl_visedicts[j]->index == (*currententity)->curstate.aiment)
+					{
+						auto save_currententity = (*currententity);
+						(*currententity) = cl_visedicts[j];
+
+						if ((*currententity)->player)
+						{
+							(*gpStudioInterface)->StudioDrawPlayer(0, R_GetPlayerState(save_currententity->index));
+						}
+						else
+						{
+							(*gpStudioInterface)->StudioDrawModel(0);
+						}
+
+						(*currententity) = save_currententity;
+						break;
+					}
+				}
+				break;
+			}
+
+			(*gpStudioInterface)->StudioDrawModel(STUDIO_RENDER);
+		}
+
+		break;
+	}
+
+	default:
+	{
+		break;
+	}
+	}
 }
 
 void R_DrawEntitiesOnList(void)
 {
-	int i, j, numvisedicts, parsecount, candraw3dsky;
+	int i, j, numvisedicts;
 
 	if (!r_drawentities->value)
 		return;
 
 	numvisedicts = *cl_numvisedicts;
-	parsecount = (*cl_parsecount) & 63;
 
 	(*numTransObjs) = 0;
 
-	candraw3dsky = (r_3dsky_parm.enable && r_3dsky->value > 0) ? true : false;
-
 	for (i = 0; i < numvisedicts; i++)
 	{
-		(*currententity) = cl_visedicts_new[i];
+		(*currententity) = cl_visedicts[i];
 
-		if ((*currententity)->curstate.rendermode != kRenderNormal || (*currententity)->curstate.renderfx == kRenderFxCloak)
+		if ((*currententity)->curstate.rendermode != kRenderNormal)
 		{
-			R_AddTEntity(*currententity);
+			//R_AddTEntity(*currententity);
 			continue;
 		}
-
-		if( !candraw3dsky && (*currententity)->curstate.entityType == ET_3DSKYENTITY )//if( !candraw3dsky && ((*currententity)->curstate.effects & EF_3DSKY) )
-			continue;
 
 		switch ((*currententity)->model->type)
 		{
@@ -382,10 +495,9 @@ void R_DrawEntitiesOnList(void)
 
 			case mod_studio:
 			{
-				R_Setup3DSkyModel();
 				if ((*currententity)->player)
 				{
-					(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER | STUDIO_EVENTS, R_GetCurrentDrawPlayerState(parsecount) );
+					(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER | STUDIO_EVENTS, R_GetPlayerState((*currententity)->index));
 				}
 				else
 				{
@@ -393,20 +505,20 @@ void R_DrawEntitiesOnList(void)
 					{
 						for (j = 0; j < numvisedicts; j++)
 						{
-							if (cl_visedicts_new[j]->index == (*currententity)->curstate.aiment)
+							if (cl_visedicts[j]->index == (*currententity)->curstate.aiment)
 							{
-								*currententity = cl_visedicts_new[j];
+								*currententity = cl_visedicts[j];
 
 								if ((*currententity)->player)
 								{
-									(*gpStudioInterface)->StudioDrawPlayer(0, R_GetCurrentDrawPlayerState(parsecount));
+									(*gpStudioInterface)->StudioDrawPlayer(0, R_GetPlayerState((*currententity)->index));
 								}
 								else
 								{
 									(*gpStudioInterface)->StudioDrawModel(0);
 								}
 
-								*currententity = cl_visedicts_new[i];
+								*currententity = cl_visedicts[i];
 								break;
 							}
 						}
@@ -415,7 +527,6 @@ void R_DrawEntitiesOnList(void)
 					(*gpStudioInterface)->StudioDrawModel(STUDIO_RENDER | STUDIO_EVENTS);
 					
 				}
-				R_Finish3DSkyModel();
 				break;
 			}
 
@@ -430,7 +541,7 @@ void R_DrawEntitiesOnList(void)
 
 	for (i = 0; i < numvisedicts; i++)
 	{
-		*currententity = cl_visedicts_new[i];
+		*currententity = cl_visedicts[i];
 
 		if ((*currententity)->curstate.rendermode != kRenderNormal)
 		{
@@ -460,15 +571,14 @@ void R_DrawEntitiesOnList(void)
 
 void R_DrawTEntitiesOnList(int onlyClientDraw)
 {
-	int i, j, numvisedicts, parsecount, candraw3dsky;
+	return gRefFuncs.R_DrawTEntitiesOnList(onlyClientDraw);
+
+	int i, j, numvisedicts;
 
 	if (!r_drawentities->value)
 		return;
 
 	numvisedicts = *cl_numvisedicts;
-	parsecount = (*cl_parsecount) & 63;
-
-	candraw3dsky = (r_3dsky_parm.enable && r_3dsky->value > 0) ? true : false;
 
 	if (!onlyClientDraw)
 	{
@@ -476,12 +586,9 @@ void R_DrawTEntitiesOnList(int onlyClientDraw)
 		{
 			(*currententity) = (*transObjects)[i].pEnt;
 
-			if( !candraw3dsky && (*currententity)->curstate.entityType == ET_3DSKYENTITY )
-				continue;
-
 			qglDisable(GL_FOG);
 
-			*r_blend = gRefFuncs.CL_FxBlend(*currententity);
+			*r_blend = CL_FxBlend(*currententity);
 
 			if (*r_blend <= 0)
 				continue;
@@ -518,7 +625,7 @@ void R_DrawTEntitiesOnList(int onlyClientDraw)
 					}
 
 					if ((*currententity)->curstate.rendermode == kRenderGlow)
-						(*r_blend) *= gRefFuncs.GlowBlend(*currententity);
+						(*r_blend) *= GlowBlend(*currententity);
 
 					if ((*r_blend) != 0)
 						R_DrawSpriteModel(*currententity);
@@ -531,10 +638,9 @@ void R_DrawTEntitiesOnList(int onlyClientDraw)
 					if ( (*currententity)->curstate.renderamt == kRenderNormal )
 						continue;
 
-					R_Setup3DSkyModel();
 					if ((*currententity)->player)
 					{
-						(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER | STUDIO_EVENTS, R_GetCurrentDrawPlayerState(parsecount));
+						(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER | STUDIO_EVENTS, R_GetPlayerState((*currententity)->index));
 					}
 					else
 					{
@@ -548,7 +654,7 @@ void R_DrawTEntitiesOnList(int onlyClientDraw)
 
 									if ((*currententity)->player)
 									{
-										(*gpStudioInterface)->StudioDrawPlayer(0, R_GetCurrentDrawPlayerState(parsecount));
+										(*gpStudioInterface)->StudioDrawPlayer(0, R_GetPlayerState((*currententity)->index));
 									}
 									else
 									{
@@ -563,7 +669,6 @@ void R_DrawTEntitiesOnList(int onlyClientDraw)
 
 						(*gpStudioInterface)->StudioDrawModel(STUDIO_RENDER | STUDIO_EVENTS);
 					}
-					R_Finish3DSkyModel();
 
 					break;
 				}
@@ -595,11 +700,7 @@ void R_DrawTEntitiesOnList(int onlyClientDraw)
 
 void R_DrawBrushModel(cl_entity_t *entity)
 {
-	//R_Setup3DSkyModel();
-
 	gRefFuncs.R_DrawBrushModel(entity);
-
-	//R_Finish3DSkyModel();
 }
 
 void R_DrawViewModel(void)
@@ -612,6 +713,52 @@ void R_PreDrawViewModel(void)
 
 void R_PolyBlend(void)
 {
+}
+
+float CalcFov(float fov_x, float width, float height)
+{
+	float a;
+	float x;
+
+	if (fov_x < 1 || fov_x > 179)
+		fov_x = 90;
+
+	x = width / tan(fov_x / 360 * M_PI);
+
+	a = atan(height / x);
+
+	a = a * 360 / M_PI;
+
+	return a;
+}
+
+void R_SetCustomFrustum(float *org, float *vpn2, float *vright2, float *vup2, float fov)
+{
+	//Seems does't work well with SvEngine
+	if (fov == 90)
+	{
+		VectorAdd(vpn2, vright2, custom_frustum[0].normal);
+		VectorSubtract(vpn2, vright2, custom_frustum[1].normal);
+
+		VectorAdd(vpn2, vup2, custom_frustum[2].normal);
+		VectorSubtract(vpn2, vup2, custom_frustum[3].normal);
+	}
+	else
+	{
+		float yfov = CalcFov(fov, glwidth, glheight);
+
+		RotatePointAroundVector(custom_frustum[0].normal, vup2, vpn2, -(90 - fov / 2));
+		RotatePointAroundVector(custom_frustum[1].normal, vup2, vpn2, 90 - fov / 2);
+		RotatePointAroundVector(custom_frustum[2].normal, vright2, vpn2, 90 - yfov / 2);
+		RotatePointAroundVector(custom_frustum[3].normal, vright2, vpn2, -(90 - yfov / 2));
+	}
+
+	for (int i = 0; i < 4; i++)
+	{
+		custom_frustum[i].type = PLANE_ANYZ;
+		custom_frustum[i].dist = DotProduct(org, custom_frustum[i].normal);
+		custom_frustum[i].signbits = SignbitsForPlane(&custom_frustum[i]);
+	}
 }
 
 void R_SetFrustum(void)
@@ -711,6 +858,8 @@ void GL_ClearFBO(FBO_Container_t *s)
 	s->s_hBackBufferDB = 0;
 	s->s_hBackBufferTex = 0;
 	s->s_hBackBufferTex2 = 0;
+	s->s_hBackBufferTex3 = 0;
+	s->s_hBackBufferTex4 = 0;
 	s->s_hBackBufferDepthTex = 0;
 	s->iWidth = s->iHeight = s->iTextureColorFormat = 0;
 }
@@ -731,6 +880,12 @@ void GL_FreeFBO(FBO_Container_t *s)
 
 	if (s->s_hBackBufferTex2)
 		qglDeleteTextures(1, &s->s_hBackBufferTex2);
+
+	if (s->s_hBackBufferTex3)
+		qglDeleteTextures(1, &s->s_hBackBufferTex3);
+
+	if (s->s_hBackBufferTex4)
+		qglDeleteTextures(1, &s->s_hBackBufferTex4);
 
 	if (s->s_hBackBufferDepthTex)
 		qglDeleteTextures(1, &s->s_hBackBufferDepthTex);
@@ -841,6 +996,7 @@ void R_GLFrameBufferDepthStencilTexture(FBO_Container_t *s, GLuint iInternalForm
 		(iInternalFormat != GL_RGBA && iInternalFormat != GL_RGBA8) ? GL_FLOAT : GL_UNSIGNED_BYTE, 0);
 
 	qglFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, s->s_hBackBufferDepthTex, 0);
+	qglBindTexture(tex2D, 0);
 }
 
 int R_GLGenColorTextureHBAO(int w, int h)
@@ -868,6 +1024,7 @@ void R_GLFrameBufferColorTextureHBAO(FBO_Container_t *s)
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	qglTexStorage2D(GL_TEXTURE_2D, 1, GL_RG16F, s->iWidth, s->iHeight);
+	qglBindTexture(GL_TEXTURE_2D, 0);
 
 	s->s_hBackBufferTex2 = GL_GenTexture();
 	qglBindTexture(GL_TEXTURE_2D, s->s_hBackBufferTex2);
@@ -875,11 +1032,50 @@ void R_GLFrameBufferColorTextureHBAO(FBO_Container_t *s)
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	qglTexStorage2D(GL_TEXTURE_2D, 1, GL_RG16F, s->iWidth, s->iHeight);
-	
+	qglBindTexture(GL_TEXTURE_2D, 0);
+
 	s->iTextureColorFormat = GL_RG16F;
 
 	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s->s_hBackBufferTex, 0);
 	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, s->s_hBackBufferTex2, 0);
+}
+
+void R_GLFrameBufferColorTextureDeferred(FBO_Container_t *s)
+{
+	s->s_hBackBufferTex = GL_GenTexture();
+	qglBindTexture(GL_TEXTURE_2D, s->s_hBackBufferTex);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, s->iWidth, s->iHeight, 0, GL_RGB, GL_FLOAT, NULL);
+	qglBindTexture(GL_TEXTURE_2D, 0);
+
+	s->s_hBackBufferTex2 = GL_GenTexture();
+	qglBindTexture(GL_TEXTURE_2D, s->s_hBackBufferTex2);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, s->iWidth, s->iHeight, 0, GL_RGB, GL_FLOAT, NULL);
+	qglBindTexture(GL_TEXTURE_2D, 0);
+
+	s->s_hBackBufferTex3 = GL_GenTexture();
+	qglBindTexture(GL_TEXTURE_2D, s->s_hBackBufferTex3);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, s->iWidth, s->iHeight, 0, GL_RGB, GL_FLOAT, NULL);
+	qglBindTexture(GL_TEXTURE_2D, 0);
+
+	s->s_hBackBufferTex4 = GL_GenTexture();
+	qglBindTexture(GL_TEXTURE_2D, s->s_hBackBufferTex4);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, s->iWidth, s->iHeight, 0, GL_RGB, GL_FLOAT, NULL);
+	qglBindTexture(GL_TEXTURE_2D, 0);
+
+	s->iTextureColorFormat = GL_RGB32F;
+
+	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s->s_hBackBufferTex, 0);
+	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, s->s_hBackBufferTex2, 0);
+	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, s->s_hBackBufferTex3, 0);
+	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, s->s_hBackBufferTex4, 0);
 }
 
 void GL_GenerateFBO(void)
@@ -914,8 +1110,8 @@ void GL_GenerateFBO(void)
 		bDoScaledFBO = false;
 
 	GL_ClearFBO(&s_MSAAFBO);
+	GL_ClearFBO(&s_GBufferFBO);
 	GL_ClearFBO(&s_BackBufferFBO);
-	GL_ClearFBO(&s_BackBufferFBO2);
 	for(int i = 0; i < DOWNSAMPLE_BUFFERS; ++i)
 		GL_ClearFBO(&s_DownSampleFBO[i]);
 	for(int i = 0; i < LUMIN_BUFFERS; ++i)
@@ -961,9 +1157,6 @@ void GL_GenerateFBO(void)
 		}
 	}
 
-	s_MSAAFBO.iWidth = glwidth;
-	s_MSAAFBO.iHeight = glheight;
-
 	if (bDoMSAAFBO)
 	{
 		const char *s_Samples;
@@ -981,7 +1174,8 @@ void GL_GenerateFBO(void)
 					gl_msaa_samples = 16;
 			}
 		}
-
+		s_MSAAFBO.iWidth = glwidth;
+		s_MSAAFBO.iHeight = glheight;
 		R_GLGenFrameBuffer(&s_MSAAFBO);
 		R_GLFrameBufferColorTexture(&s_MSAAFBO, iColorInternalFormat, true);
 		R_GLFrameBufferDepthTexture(&s_MSAAFBO, GL_DEPTH_COMPONENT24, true);
@@ -1001,13 +1195,10 @@ void GL_GenerateFBO(void)
 		gEngfuncs.Con_Printf("MSAA backbuffer rendering disabled.\n");
 	}
 
-	s_BackBufferFBO.iWidth = glwidth;
-	s_BackBufferFBO.iHeight = glheight;
-
-	s_BackBufferFBO2.iWidth = 0;
-	s_BackBufferFBO2.iHeight = 0;
 	if (bDoScaledFBO)
 	{
+		s_BackBufferFBO.iWidth = glwidth;
+		s_BackBufferFBO.iHeight = glheight;
 		R_GLGenFrameBuffer(&s_BackBufferFBO);
 		R_GLFrameBufferColorTexture(&s_BackBufferFBO, iColorInternalFormat, false);
 		R_GLFrameBufferDepthTexture(&s_BackBufferFBO, GL_DEPTH_COMPONENT24, false);
@@ -1017,8 +1208,6 @@ void GL_GenerateFBO(void)
 			GL_FreeFBO(&s_BackBufferFBO);
 			gEngfuncs.Con_Printf("FBO backbuffer rendering disabled due to create error.\n");
 		}
-
-		R_GLGenFrameBuffer(&s_BackBufferFBO2);
 	}
 	else
 	{
@@ -1027,16 +1216,17 @@ void GL_GenerateFBO(void)
 
 	if (!s_BackBufferFBO.s_hBackBufferTex)
 	{
-		s_BackBufferFBO.s_hBackBufferTex = R_GLGenTextureColorFormat(s_BackBufferFBO.iWidth, s_BackBufferFBO.iHeight, iColorInternalFormat);
-		s_BackBufferFBO.s_hBackBufferDepthTex = R_GLGenDepthTexture(s_BackBufferFBO.iWidth, s_BackBufferFBO.iHeight);
+		s_BackBufferFBO.s_hBackBufferTex = GL_GenTextureColorFormat(s_BackBufferFBO.iWidth, s_BackBufferFBO.iHeight, iColorInternalFormat);
+		s_BackBufferFBO.s_hBackBufferDepthTex = GL_GenDepthTexture(s_BackBufferFBO.iWidth, s_BackBufferFBO.iHeight);
+		s_BackBufferFBO.iWidth = glwidth;
+		s_BackBufferFBO.iHeight = glheight;
 		s_BackBufferFBO.iTextureColorFormat = iColorInternalFormat;
 	}
 
-	s_DepthLinearFBO.iWidth = glwidth;
-	s_DepthLinearFBO.iHeight = glheight;
-	
 	if (bDoScaledFBO)
 	{
+		s_DepthLinearFBO.iWidth = glwidth;
+		s_DepthLinearFBO.iHeight = glheight;
 		R_GLGenFrameBuffer(&s_DepthLinearFBO);
 		R_GLFrameBufferColorTexture(&s_DepthLinearFBO, GL_R32F, false);
 
@@ -1048,15 +1238,16 @@ void GL_GenerateFBO(void)
 	}
 	if (!s_DepthLinearFBO.s_hBackBufferTex)
 	{
-		s_DepthLinearFBO.s_hBackBufferTex = R_GLGenTextureColorFormat(glwidth, glheight, GL_R32F);
+		s_DepthLinearFBO.s_hBackBufferTex = GL_GenTextureColorFormat(glwidth, glheight, GL_R32F);	
+		s_DepthLinearFBO.iWidth = glwidth;
+		s_DepthLinearFBO.iHeight = glheight;
 		s_DepthLinearFBO.iTextureColorFormat = GL_R32F;
 	}
 
-	s_HBAOCalcFBO.iWidth = glwidth;
-	s_HBAOCalcFBO.iHeight = glheight;
-
 	if (bDoScaledFBO)
 	{
+		s_HBAOCalcFBO.iWidth = glwidth;
+		s_HBAOCalcFBO.iHeight = glheight;
 		R_GLGenFrameBuffer(&s_HBAOCalcFBO);
 		R_GLFrameBufferColorTextureHBAO(&s_HBAOCalcFBO);
 
@@ -1070,13 +1261,27 @@ void GL_GenerateFBO(void)
 	if (!s_HBAOCalcFBO.s_hBackBufferTex)
 	{
 		s_HBAOCalcFBO.s_hBackBufferTex = R_GLGenColorTextureHBAO(glwidth, glheight);
-		s_HBAOCalcFBO.s_hBackBufferTex2 = R_GLGenColorTextureHBAO(glwidth, glheight);	
+		s_HBAOCalcFBO.s_hBackBufferTex2 = R_GLGenColorTextureHBAO(glwidth, glheight);
+		s_HBAOCalcFBO.iWidth = glwidth;
+		s_HBAOCalcFBO.iHeight = glheight;
 		s_HBAOCalcFBO.iTextureColorFormat = GL_RG16F;
+	}
 
+	s_ShadowFBO.iWidth = glwidth;
+	s_ShadowFBO.iHeight = glheight;
+	if (bDoScaledFBO)
+	{
+		R_GLGenFrameBuffer(&s_ShadowFBO);
+	}
+
+	s_WaterFBO.iWidth = glwidth;
+	s_WaterFBO.iHeight = glheight;
+	if (bDoScaledFBO)
+	{
+		R_GLGenFrameBuffer(&s_WaterFBO);
 	}
 
 	int downW, downH;
-
 	//DownSample FBO 1->1/4->1/16
 	if(bDoHDR)
 	{
@@ -1104,9 +1309,24 @@ void GL_GenerateFBO(void)
 			
 			if (!s_DownSampleFBO[i].s_hBackBufferTex)
 			{
-				s_DownSampleFBO[i].s_hBackBufferTex = R_GLGenTextureColorFormat(downW, downH, iColorInternalFormat);
+				s_DownSampleFBO[i].s_hBackBufferTex = GL_GenTextureColorFormat(downW, downH, iColorInternalFormat);
 				s_DownSampleFBO[i].iTextureColorFormat = iColorInternalFormat;
 			}
+		}
+	}
+
+	if (bDoScaledFBO)
+	{
+		s_GBufferFBO.iWidth = glwidth;
+		s_GBufferFBO.iHeight = glheight;
+		R_GLGenFrameBuffer(&s_GBufferFBO);
+		R_GLFrameBufferColorTextureDeferred(&s_GBufferFBO);
+		R_GLFrameBufferDepthTexture(&s_GBufferFBO, GL_DEPTH_COMPONENT24, false);
+
+		if (qglCheckFramebufferStatusEXT(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+		{
+			GL_FreeFBO(&s_GBufferFBO);
+			gEngfuncs.Con_Printf("GBuffer backbuffer rendering disabled due to create error.\n");
 		}
 	}
 
@@ -1140,7 +1360,7 @@ void GL_GenerateFBO(void)
 
 			if(!s_LuminFBO[i].s_hBackBufferTex)
 			{
-				s_LuminFBO[i].s_hBackBufferTex = R_GLGenTextureColorFormat(downW, downH, GL_R32F);
+				s_LuminFBO[i].s_hBackBufferTex = GL_GenTextureColorFormat(downW, downH, GL_R32F);
 				s_LuminFBO[i].iTextureColorFormat = GL_R32F;
 			}
 
@@ -1170,7 +1390,7 @@ void GL_GenerateFBO(void)
 
 			if (!s_Lumin1x1FBO[i].s_hBackBufferTex)
 			{
-				s_Lumin1x1FBO[i].s_hBackBufferTex = R_GLGenTextureColorFormat(1, 1, GL_R32F);
+				s_Lumin1x1FBO[i].s_hBackBufferTex = GL_GenTextureColorFormat(1, 1, GL_R32F);
 				s_Lumin1x1FBO[i].iTextureColorFormat = GL_R32F;
 			}
 		}
@@ -1195,7 +1415,7 @@ void GL_GenerateFBO(void)
 
 		if (!s_BrightPassFBO.s_hBackBufferTex)
 		{
-			s_BrightPassFBO.s_hBackBufferTex = R_GLGenTextureColorFormat(glwidth >> DOWNSAMPLE_BUFFERS, glheight >> DOWNSAMPLE_BUFFERS, iColorInternalFormat);
+			s_BrightPassFBO.s_hBackBufferTex = GL_GenTextureColorFormat(glwidth >> DOWNSAMPLE_BUFFERS, glheight >> DOWNSAMPLE_BUFFERS, iColorInternalFormat);
 			s_BrightPassFBO.iTextureColorFormat = iColorInternalFormat;
 		}
 	}
@@ -1227,7 +1447,7 @@ void GL_GenerateFBO(void)
 
 				if (!s_BlurPassFBO[i][j].s_hBackBufferTex)
 				{
-					s_BlurPassFBO[i][j].s_hBackBufferTex = R_GLGenTextureColorFormat(downW, downH, iColorInternalFormat);
+					s_BlurPassFBO[i][j].s_hBackBufferTex = GL_GenTextureColorFormat(downW, downH, iColorInternalFormat);
 					s_BlurPassFBO[i][j].iTextureColorFormat = iColorInternalFormat;
 				}
 			}
@@ -1255,7 +1475,7 @@ void GL_GenerateFBO(void)
 
 		if (!s_BrightAccumFBO.s_hBackBufferTex)
 		{
-			s_BrightAccumFBO.s_hBackBufferTex = R_GLGenTextureColorFormat(glwidth >> DOWNSAMPLE_BUFFERS, glheight >> DOWNSAMPLE_BUFFERS, iColorInternalFormat);
+			s_BrightAccumFBO.s_hBackBufferTex = GL_GenTextureColorFormat(glwidth >> DOWNSAMPLE_BUFFERS, glheight >> DOWNSAMPLE_BUFFERS, iColorInternalFormat);
 			s_BrightAccumFBO.iTextureColorFormat = iColorInternalFormat;
 		}
 	}
@@ -1279,7 +1499,7 @@ void GL_GenerateFBO(void)
 
 		if (!s_ToneMapFBO.s_hBackBufferTex)
 		{
-			s_ToneMapFBO.s_hBackBufferTex = R_GLGenTextureColorFormat(s_ToneMapFBO.iWidth, s_ToneMapFBO.iHeight, GL_RGBA8);
+			s_ToneMapFBO.s_hBackBufferTex = GL_GenTextureColorFormat(s_ToneMapFBO.iWidth, s_ToneMapFBO.iHeight, GL_RGBA8);
 			s_ToneMapFBO.iTextureColorFormat = GL_RGBA8;
 		}
 	}
@@ -1301,11 +1521,7 @@ void GL_GenerateFBO(void)
 		}
 	}
 
-	//qglDrawBuffer(GL_NONE);
-	//qglReadBuffer(GL_NONE);
-
 	qglBindFramebufferEXT(GL_FRAMEBUFFER, 0);
-	readframebuffer = drawframebuffer = 0;
 }
 
 void GL_Init(void)
@@ -1315,19 +1531,22 @@ void GL_Init(void)
 	CheckMultiTextureExtensions();
 
 	GL_GenerateFBO();
+	GL_InitShaders();
 }
 
 void GL_Shutdown(void)
 {
+	GL_FreeShaders();
+
 	GL_FreeFBO(&s_MSAAFBO);
 	GL_FreeFBO(&s_BackBufferFBO);
-	for(int i = 0; i < DOWNSAMPLE_BUFFERS; ++i)
+	for (int i = 0; i < DOWNSAMPLE_BUFFERS; ++i)
 		GL_FreeFBO(&s_DownSampleFBO[i]);
-	for(int i = 0; i < LUMIN_BUFFERS; ++i)
+	for (int i = 0; i < LUMIN_BUFFERS; ++i)
 		GL_FreeFBO(&s_LuminFBO[i]);
-	for(int i = 0; i < LUMIN1x1_BUFFERS; ++i)
+	for (int i = 0; i < LUMIN1x1_BUFFERS; ++i)
 		GL_FreeFBO(&s_Lumin1x1FBO[i]);
-	for(int i = 0; i < BLUR_BUFFERS; ++i)
+	for (int i = 0; i < BLUR_BUFFERS; ++i)
 	{
 		GL_FreeFBO(&s_BlurPassFBO[i][0]);
 		GL_FreeFBO(&s_BlurPassFBO[i][1]);
@@ -1335,6 +1554,8 @@ void GL_Shutdown(void)
 	GL_FreeFBO(&s_ToneMapFBO);
 	GL_FreeFBO(&s_DepthLinearFBO);
 	GL_FreeFBO(&s_HBAOCalcFBO);
+	GL_FreeFBO(&s_ShadowFBO);
+	GL_FreeFBO(&s_WaterFBO);
 }
 
 void GL_BeginRendering(int *x, int *y, int *width, int *height)
@@ -1357,24 +1578,17 @@ void GL_BeginRendering(int *x, int *y, int *width, int *height)
 
 void R_PreRenderView()
 {
-	/*if (r_3dsky_parm.enable && r_3dsky->value)
-	{
-		R_ViewOriginFor3DSky(_3dsky_view);
-	}*/
-
 	if (!r_refdef->onlyClientDraws)
 	{
-		if (shadow.program && r_shadow && r_shadow->value)
-		{
-			R_RenderShadowMaps();
-		}
 		if (water.program && r_water && r_water->value)
 		{
 			R_RenderWaterView();
 		}
+		if (shadow.program && r_shadow && r_shadow->value)
+		{
+			R_RenderShadowMap();
+		}
 	}
-
-	Draw_UpdateAnsios();
 
 	if (s_BackBufferFBO.s_hBackBufferFBO)
 	{
@@ -1382,7 +1596,7 @@ void R_PreRenderView()
 			qglBindFramebufferEXT(GL_FRAMEBUFFER, s_MSAAFBO.s_hBackBufferFBO);
 		else
 			qglBindFramebufferEXT(GL_FRAMEBUFFER, s_BackBufferFBO.s_hBackBufferFBO);
-	}
+	}	
 }
 
 void R_PostRenderView()
@@ -1391,14 +1605,6 @@ void R_PostRenderView()
 	{
 		if (s_MSAAFBO.s_hBackBufferFBO)
 		{
-			for (int sampleIndex = 0; sampleIndex < max(1, sampleIndex); sampleIndex++)
-			{
-				if (!R_DoSSAO(sampleIndex))
-				{
-					break;
-				}
-			}
-
 			qglBindFramebufferEXT(GL_DRAW_FRAMEBUFFER, s_BackBufferFBO.s_hBackBufferFBO);
 			qglBindFramebufferEXT(GL_READ_FRAMEBUFFER, s_MSAAFBO.s_hBackBufferFBO);
 			qglBlitFramebufferEXT(0, 0, s_MSAAFBO.iWidth, s_MSAAFBO.iHeight, 0, 0, s_BackBufferFBO.iWidth, s_BackBufferFBO.iHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR);
@@ -1407,14 +1613,14 @@ void R_PostRenderView()
 		}
 		else
 		{
-			R_DoSSAO(-1);
+			R_DoFXAA();
 			R_DoHDR();
 		}
 		qglBindFramebufferEXT(GL_FRAMEBUFFER, s_BackBufferFBO.s_hBackBufferFBO);
 	}
 	else
 	{
-		R_DoSSAO(-1);
+		R_DoFXAA();
 		R_DoHDR();
 	}
 }
@@ -1447,6 +1653,31 @@ void R_RenderView(void)
 void R_RenderScene(void)
 {
 	gRefFuncs.R_RenderScene();
+
+	if (!drawreflect && !drawrefract)
+	{
+		if (s_MSAAFBO.s_hBackBufferFBO)
+		{
+			for (int sampleIndex = 0; sampleIndex < max(1, gl_msaa_samples); sampleIndex++)
+			{
+				if (!R_DoSSAO(sampleIndex))
+				{
+					break;
+				}
+			}
+		}
+		else
+		{
+			R_DoSSAO(-1);
+		}
+	}
+}
+
+void R_DrawWorld(void)
+{
+	R_BeginRenderGBuffer();
+
+	gRefFuncs.R_DrawWorld();
 }
 
 void GL_EndRendering(void)
@@ -1576,7 +1807,7 @@ void R_InitCvars(void)
 	gl_vsync = gEngfuncs.pfnGetCvarPointer("gl_vsync");
 
 	if (!gl_vsync)
-		gl_vsync = gEngfuncs.pfnRegisterVariable("gl_vsync", "1", FCVAR_ARCHIVE);
+		gl_vsync = gEngfuncs.pfnRegisterVariable("gl_vsync", "1", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 
 	gl_ztrick = gEngfuncs.pfnGetCvarPointer("gl_ztrick");
 
@@ -1627,7 +1858,7 @@ void R_InitCvars(void)
 
 	gl_ansio = gEngfuncs.pfnGetCvarPointer("gl_ansio");
 	if (!gl_ansio)
-		gl_ansio = gEngfuncs.pfnRegisterVariable("gl_ansio", "1", FCVAR_ARCHIVE);
+		gl_ansio = gEngfuncs.pfnRegisterVariable("gl_ansio", "1", FCVAR_CLIENTDLL | FCVAR_ARCHIVE);
 
 	const char *s_ansio;
 	gl_force_ansio = 0;
@@ -1650,19 +1881,15 @@ void R_InitCvars(void)
 
 void R_Init(void)
 {
-	if(gRefFuncs.FreeFBObjects)
-		gRefFuncs.FreeFBObjects();
-
 	R_InitCvars();
-	R_InitTextures();
-	R_InitShaders();
 	R_InitWater();
 	R_InitStudio();
 	R_InitShadow();
 	R_InitWSurf();
-	R_InitRefHUD();
+	R_InitGLHUD();
 	R_Init3DSky();
 	R_InitCloak();
+	R_InitLight();
 
 	Draw_Init();
 }
@@ -1677,14 +1904,44 @@ void R_VidInit(void)
 
 void R_Shutdown(void)
 {
-	R_FreeTextures();
-	R_FreeShaders();
+	R_FreeShadow();
+	R_FreeWater();
 }
 
 void R_ForceCVars(qboolean mp)
 {
-	if (drawreflect || drawrefract || drawshadow || drawshadowscene)
+	if (drawreflect || drawrefract)
 		return;
 
 	gRefFuncs.R_ForceCVars(mp);
+}
+
+void R_NewMap(void)
+{
+	r_worldentity = gEngfuncs.GetEntityByIndex(0);
+	r_worldmodel = r_worldentity->model;
+
+	gRefFuncs.R_NewMap();
+
+	R_VidInitWSurf();
+}
+
+mleaf_t *Mod_PointInLeaf(vec3_t p, model_t *model)
+{
+	if (drawreflect && model == r_worldmodel && 0 == VectorCompare(p, r_refdef->vieworg))
+	{
+		return gRefFuncs.Mod_PointInLeaf(water_view, model);
+	}
+
+	return gRefFuncs.Mod_PointInLeaf(p, model);
+}
+
+float *R_GetAttachmentPoint(int entity, int attachment)
+{
+	auto pEntity = gEngfuncs.GetEntityByIndex(entity);
+
+	if (attachment)
+		return pEntity->attachment[attachment - 1];
+
+	return pEntity->origin;
 }

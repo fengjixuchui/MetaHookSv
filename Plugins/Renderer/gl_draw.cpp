@@ -154,12 +154,6 @@ void Draw_Init(void)
 		Cmd_HookCmd("snapshot", CL_ScreenShot_f);
 }
 
-byte *R_GetTexLoaderBuffer(int *bufsize)
-{
-	if(bufsize)
-		*bufsize = sizeof(texloader_buffer);
-	return texloader_buffer;
-}
 
 //Texture resampler
 
@@ -353,7 +347,7 @@ int GL_AllocTexture(char *identifier, GL_TEXTURETYPE textureType, int width, int
 
 	glt = NULL;
 
-	if (!gltextures && gltextures_SvEngine)
+	if (gltextures_SvEngine)
 		gltextures = *gltextures_SvEngine;
 
 tryagain:
@@ -394,11 +388,21 @@ tryagain:
 	{
 		if (maxgltextures_SvEngine)
 		{
-			if ((*numgltextures) + 1 >= (*maxgltextures_SvEngine))
+			if ((*numgltextures) + 1 > (*maxgltextures_SvEngine))
 			{
 				//realloc just like SvEngine does.
+				int v16 = (*numgltextures) - (*maxgltextures_SvEngine) + 1;
+				if (/*dword_30FC6F4 >= 0 || */(*numgltextures) - (*maxgltextures_SvEngine) < 0)
+				{
+					if (v16 <= 0)
+					{
+						v16 = (*maxgltextures_SvEngine);
+						if (!(*maxgltextures_SvEngine))
+							v16 = 1;
+					}
+				}
 
-				*maxgltextures_SvEngine += 100;
+				*maxgltextures_SvEngine += v16;
 				*gltextures_SvEngine = (gltexture_t *)gRefFuncs.realloc_SvEngine((void *)(*gltextures_SvEngine), (*maxgltextures_SvEngine) * sizeof(gltexture_t));
 				gltextures = *gltextures_SvEngine;
 			}
@@ -424,7 +428,7 @@ tryagain:
 	glt->width = width;
 	glt->height = height;
 	glt->mipmap = mipmap;
-	glt->servercount = (textureType == GLT_WORLD) ? *gHostSpawnCount : 0;
+	glt->servercount = (textureType != GLT_SYSTEM && textureType != GLT_DECAL && textureType != GLT_HUDSPRITE) ? *gHostSpawnCount : 0;
 	glt->paletteIndex = -1;
 
 	currentglt = glt;
@@ -434,10 +438,6 @@ tryagain:
 
 int GL_LoadTexture2(char *identifier, GL_TEXTURETYPE textureType, int width, int height, byte *data, qboolean mipmap, int iType, byte *pPal, int filter)
 {
-	if(!qglTexParameterf) 
-	{
-		return gRefFuncs.GL_LoadTexture2(identifier, textureType, width, height, data, mipmap, iType, pPal, filter);
-	}
 	/*if (!mipmap || textureType != GLT_WORLD)
 	{
 		if(qglTexParameterf)//just in case of crashing when called before initalize QGL
@@ -507,12 +507,7 @@ void GL_UploadDXT(byte *data, int width, int height, qboolean mipmap, qboolean a
 
 int GL_LoadTextureEx(const char *identifier, GL_TEXTURETYPE textureType, int width, int height, byte *data, qboolean mipmap, qboolean ansio)
 {
-	int scaled_width, scaled_height;
-	qboolean rescale;
-	byte *pTexture;
-	int texnum;
-
-	texnum = GL_AllocTexture((char *)identifier, textureType, width, height, mipmap);
+	int texnum = GL_AllocTexture((char *)identifier, textureType, width, height, mipmap);
 
 	if(!texnum)
 		return 0;
@@ -541,8 +536,10 @@ extern cvar_t *r_wsurf_decal;
 texture_t *Draw_DecalTexture(int index)
 {
 	texture_t *t = gRefFuncs.Draw_DecalTexture(index);
+
 	if(index < 0)
 		return t;
+
 	if(t->anim_next && r_wsurf_decal->value)
 		return t->anim_next;
 
@@ -879,6 +876,42 @@ int SaveImageGeneric(const char *filename, int width, int height, byte *data)
 	g_pFileSystem->Close(fileHandle);
 	FreeImage_Unload(fiB);
 	return TRUE;
+}
+
+int R_LoadTexture(const char *filepath, const char *name, int *width, int *height, GL_TEXTURETYPE type)
+{
+	int w, h;
+
+	const char *extension = V_GetFileExtension(filepath);
+
+	if (!extension)
+	{
+		gEngfuncs.Con_Printf("R_LoadTexture: File %s has no extension.\n", filepath);
+		return 0;
+	}
+
+	if (!stricmp(extension, "dds") && gl_s3tc_compression_support)
+	{
+		if (LoadDDS(filepath, texloader_buffer, sizeof(texloader_buffer), &w, &h))
+		{
+			if (width)
+				*width = w;
+			if (height)
+				*height = h;
+			return gRefFuncs.GL_LoadTexture2((char *)name, type, w, h, texloader_buffer, 1, 3, NULL, 0x2703);
+		}
+	}
+	else if (LoadImageGeneric(filepath, texloader_buffer, sizeof(texloader_buffer), &w, &h))
+	{
+		if (width)
+			*width = w;
+		if (height)
+			*height = h;
+		return gRefFuncs.GL_LoadTexture2((char *)name, type, w, h, texloader_buffer, 1, 3, NULL, 0x2703);
+	}
+
+	gEngfuncs.Con_Printf("R_LoadTexture: Cannot load texture %s.\n", filepath);
+	return 0;
 }
 
 int R_LoadTextureEx(const char *filepath, const char *name, int *width, int *height, GL_TEXTURETYPE type, qboolean mipmap, qboolean ansio)

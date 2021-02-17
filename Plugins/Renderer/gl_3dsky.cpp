@@ -85,8 +85,6 @@ void R_Render3DSky(void)
 
 	VectorCopy(_3dsky_view, r_refdef->vieworg);
 
-	R_UpdateRefDef();
-
 	++(*r_framecount);
 	*r_oldviewleaf = *r_viewleaf;
 	*r_viewleaf = Mod_PointInLeaf(r_origin, r_worldmodel);
@@ -99,7 +97,6 @@ void R_Render3DSky(void)
 	qglViewport(0, 0, glwidth, glheight);
 
 	R_ClearSkyBox();
-	//R_DrawWorld();
 
 	R_PopRefDef();
 
@@ -108,16 +105,15 @@ void R_Render3DSky(void)
 
 void R_Draw3DSkyEntities(void)
 {
-	int i, j, numvisedicts, parsecount;
+	int i, j, numvisedicts;
 
 	numvisedicts = *cl_numvisedicts;
-	parsecount = (*cl_parsecount) & 63;
 
 	(*numTransObjs) = 0;
 
 	for (i = 0; i < numvisedicts; i++)
 	{
-		(*currententity) = cl_visedicts_new[i];
+		(*currententity) = cl_visedicts[i];
 
 		if( (*currententity)->curstate.entityType != ET_3DSKYENTITY )//if( !((*currententity)->curstate.effects & EF_3DSKY) )
 			continue;
@@ -138,10 +134,9 @@ void R_Draw3DSkyEntities(void)
 
 			case mod_studio:
 			{
-				R_Setup3DSkyModel();
 				if ((*currententity)->player)
 				{
-					(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER | STUDIO_EVENTS, R_GetCurrentDrawPlayerState(parsecount) );
+					(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER | STUDIO_EVENTS, R_GetPlayerState((*currententity)->index) );
 				}
 				else
 				{
@@ -149,20 +144,20 @@ void R_Draw3DSkyEntities(void)
 					{
 						for (j = 0; j < numvisedicts; j++)
 						{
-							if (cl_visedicts_new[j]->index == (*currententity)->curstate.aiment)
+							if (cl_visedicts[j]->index == (*currententity)->curstate.aiment)
 							{
-								*currententity = cl_visedicts_new[j];
+								*currententity = cl_visedicts[j];
 
 								if ((*currententity)->player)
 								{
-									(*gpStudioInterface)->StudioDrawPlayer(0, R_GetCurrentDrawPlayerState(parsecount));
+									(*gpStudioInterface)->StudioDrawPlayer(0, R_GetPlayerState((*currententity)->index));
 								}
 								else
 								{
 									(*gpStudioInterface)->StudioDrawModel(0);
 								}
 
-								*currententity = cl_visedicts_new[i];
+								*currententity = cl_visedicts[i];
 								break;
 							}
 						}
@@ -170,7 +165,6 @@ void R_Draw3DSkyEntities(void)
 
 					(*gpStudioInterface)->StudioDrawModel(STUDIO_RENDER | STUDIO_EVENTS);
 				}
-				R_Finish3DSkyModel();
 				break;
 			}
 
@@ -185,7 +179,7 @@ void R_Draw3DSkyEntities(void)
 
 	for (i = 0; i < numvisedicts; i++)
 	{
-		*currententity = cl_visedicts_new[i];
+		*currententity = cl_visedicts[i];
 
 		if ((*currententity)->curstate.rendermode != kRenderNormal)
 		{
@@ -274,7 +268,7 @@ void R_Draw3DSkyEntities(void)
 				R_Setup3DSkyModel();
 				if ((*currententity)->player)
 				{
-					(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER | STUDIO_EVENTS, R_GetCurrentDrawPlayerState(parsecount));
+					(*gpStudioInterface)->StudioDrawPlayer(STUDIO_RENDER | STUDIO_EVENTS, R_GetPlayerState((*currententity)->index));
 				}
 				else
 				{
@@ -288,7 +282,7 @@ void R_Draw3DSkyEntities(void)
 
 								if ((*currententity)->player)
 								{
-									(*gpStudioInterface)->StudioDrawPlayer(0, R_GetCurrentDrawPlayerState(parsecount));
+									(*gpStudioInterface)->StudioDrawPlayer(0, R_GetPlayerState((*currententity)->index));
 								}
 								else
 								{

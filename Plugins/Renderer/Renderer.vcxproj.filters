@@ -83,10 +83,10 @@
     <ClCompile Include="qgl.cpp">
       <Filter>Source</Filter>
     </ClCompile>
-    <ClCompile Include="zone.cpp">
+    <ClCompile Include="..\..\HLSDK\common\interface.cpp">
       <Filter>Source</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\HLSDK\common\interface.cpp">
+    <ClCompile Include="gl_light.cpp">
       <Filter>Source</Filter>
     </ClCompile>
   </ItemGroup>
@@ -169,14 +169,14 @@
     <ClInclude Include="zone.h">
       <Filter>Header</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\src\Interface\IBTEClient.h">
-      <Filter>Interface</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\src\Interface\IRenderer.h">
       <Filter>Interface</Filter>
     </ClInclude>
     <ClInclude Include="ref_int_internal.h">
       <Filter>Interface</Filter>
+    </ClInclude>
+    <ClInclude Include="gl_light.h">
+      <Filter>Header</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

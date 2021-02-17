@@ -31,6 +31,7 @@
 #include "gl_studio.h"
 #include "gl_hud.h"
 #include "gl_shadow.h"
+#include "gl_light.h"
 #include "gl_wsurf.h"
 #include "gl_draw.h"
 #include "gl_3dsky.h"
@@ -44,9 +45,7 @@ extern ref_params_t r_params;
 extern cl_entity_t *r_worldentity;
 extern model_t *r_worldmodel;
 extern int *cl_numvisedicts;
-extern int cl_maxvisedicts;
-extern cl_entity_t **cl_visedicts_old;
-extern cl_entity_t **cl_visedicts_new;
+extern cl_entity_t **cl_visedicts;
 extern cl_entity_t **currententity;
 extern int *maxTransObjs;
 extern int *numTransObjs;
@@ -58,9 +57,6 @@ extern float *videowindowaspect;
 extern float *windowvideoaspect;
 extern float videowindowaspect_old;
 extern float windowvideoaspect_old;
-
-extern GLuint drawframebuffer;
-extern GLuint readframebuffer;
 
 extern float scr_fov_value;
 extern mplane_t *frustum;
@@ -111,6 +107,8 @@ extern int gl_csaa_samples;
 extern int *gl_msaa_fbo;
 extern int *gl_backbuffer_fbo;
 
+extern qboolean *mtexenabled;
+
 extern int glwidth;
 extern int glheight;
 
@@ -121,8 +119,8 @@ extern qboolean bDoHDR;
 extern qboolean bNoStretchAspect;
 
 extern FBO_Container_t s_MSAAFBO;
+extern FBO_Container_t s_GBufferFBO;
 extern FBO_Container_t s_BackBufferFBO;
-extern FBO_Container_t s_BackBufferFBO2;
 extern FBO_Container_t s_DownSampleFBO[DOWNSAMPLE_BUFFERS];
 extern FBO_Container_t s_LuminFBO[LUMIN_BUFFERS];
 extern FBO_Container_t s_Lumin1x1FBO[LUMIN1x1_BUFFERS];
@@ -133,15 +131,20 @@ extern FBO_Container_t s_ToneMapFBO;
 extern FBO_Container_t s_DepthLinearFBO;
 extern FBO_Container_t s_HBAOCalcFBO;
 extern FBO_Container_t s_CloakFBO;
+extern FBO_Container_t s_ShadowFBO;
+extern FBO_Container_t s_WaterFBO;
 
 extern int skytexturenum;
 
-extern msurface_t *skychain;
-extern msurface_t *waterchain;
+extern msurface_t **skychain;
+extern msurface_t **waterchain;
 
 extern int *gSkyTexNumber;
 extern skybox_t *skymins;
 extern skybox_t *skymaxs;
+
+extern float gldepthmin;
+extern float gldepthmax;
 
 extern cvar_t *r_bmodelinterp;
 extern cvar_t *r_bmodelhighfrac;
@@ -203,6 +206,7 @@ extern cvar_t *cl_righthand;
 
 void R_FillAddress(void);
 void R_InstallHook(void);
+
 void R_RenderView(void);
 void R_RenderScene(void);
 void R_RenderView_SvEngine(int a1);
@@ -210,48 +214,40 @@ qboolean R_CullBox(vec3_t mins, vec3_t maxs);
 void R_RotateForEntity(vec_t *origin, cl_entity_t *e);
 void R_Clear(void);
 void R_ForceCVars(qboolean mp);
-void R_UploadLightmaps(void);
 void R_NewMap(void);
 void R_Init(void);
 void R_VidInit(void);
 void R_Shutdown(void);
 void R_InitTextures(void);
 void R_FreeTextures(void);
-void R_InitShaders(void);
-void R_FreeShaders(void);
-void R_SetupFrame(void);
 void R_SetFrustum(void);
 void R_SetupGL(void);
 void R_MarkLeaves(void);
 void R_SetFrustum(void);
 void R_CalcRefdef(struct ref_params_s *pparams);
 void R_DrawWorld(void);
-void R_DrawWaterSurfaces(void);
 void R_DrawSkyChain(msurface_t *s);
 void R_ClearSkyBox(void);
 void R_DrawSkyBox(void);
 void R_DrawEntitiesOnList(void);
+void R_RecursiveWorldNode(mnode_t *node);
 void R_DrawSequentialPoly(msurface_t *s, int face);
 float *R_GetAttachmentPoint(int entity, int attachment);
 void R_DrawBrushModel(cl_entity_t *entity);
 void R_DrawSpriteModel(cl_entity_t *entity);
 void R_GetSpriteAxes(cl_entity_t *entity, int type, float *vforwrad, float *vright, float *vup);
 void R_SpriteColor(mcolor24_t *col, cl_entity_t *entity, int renderamt);
+entity_state_t *R_GetPlayerState(int index);
 float GlowBlend(cl_entity_t *entity);
 int CL_FxBlend(cl_entity_t *entity);
-
+void R_DrawCurrentEntity(void);
 void R_DrawTEntitiesOnList(int onlyClientDraw);
 void R_AllocObjects(int nMax);
 void R_AddTEntity(cl_entity_t *pEnt);
-void R_SortTEntities(void);
-
+void GL_Shutdown(void);
 void GL_Init(void);
 void GL_BeginRendering(int *x, int *y, int *width, int *height);
 void GL_EndRendering(void);
-void GL_BuildLightmaps(void);
-void GL_InitExtensions(void);
-bool GL_Support(int r_ext);
-void GL_SetDefaultState(void);
 GLuint GL_GenTexture(void);
 void GL_DeleteTexture(GLuint tex);
 void GL_Bind(int texnum);
@@ -260,35 +256,35 @@ void GL_DisableMultitexture(void);
 void GL_EnableMultitexture(void);
 int GL_LoadTexture(char *identifier, GL_TEXTURETYPE textureType, int width, int height, byte *data, qboolean mipmap, int iType, byte *pPal);
 int GL_LoadTexture2(char *identifier, GL_TEXTURETYPE textureType, int width, int height, byte *data, qboolean mipmap, int iType, byte *pPal, int filter);
+void GL_InitShaders(void);
+void GL_FreeShaders(void);
 texture_t *Draw_DecalTexture(int index);
 void Draw_MiptexTexture(cachewad_t *wad, byte *data);
-
 void Draw_UpdateAnsios(void);
 void Draw_Init(void);
-
 void EmitWaterPolys(msurface_t *fa, int direction);
 void MYgluPerspective(GLdouble fovy, GLdouble aspect, GLdouble zNear, GLdouble zFar);
+void R_SetCustomFrustum(float *org, float *vpn2, float *vright2, float *vup2, float fov);
 float CalcFov(float fov_x, float width, float height);
 int SignbitsForPlane(mplane_t *out);
-void BuildSurfaceDisplayList(msurface_t *fa);
 
 refdef_t *R_GetRefDef(void);
 int R_GetDrawPass(void);
-GLuint R_GLGenTextureRGBA8(int w, int h);
+GLuint GL_GenTextureRGBA8(int w, int h);
 
-void R_GLUploadDepthTexture(int texid, int w, int h);
-GLuint R_GLGenDepthTexture(int w, int h);
+void GL_UploadDepthTexture(int texid, int w, int h);
+GLuint GL_GenDepthTexture(int w, int h);
 
-GLuint R_GLGenTextureColorFormat(int w, int h, int iInternalFormat);
-void R_GLUploadTextureColorFormat(int texid, int w, int h, int iInternalFormat);
+GLuint GL_GenTextureColorFormat(int w, int h, int iInternalFormat);
+void GL_UploadTextureColorFormat(int texid, int w, int h, int iInternalFormat);
 
-GLuint R_GLGenShadowTexture(int w, int h);
-void R_GLUploadShadowTexture(int texid, int w, int h);
+GLuint GL_GenShadowTexture(int w, int h);
+void GL_UploadShadowTexture(int texid, int w, int h);
 
-byte *R_GetTexLoaderBuffer(int *bufsize);
 gltexture_t *R_GetCurrentGLTexture(void);
 int GL_LoadTextureEx(const char *identifier, GL_TEXTURETYPE textureType, int width, int height, byte *data, qboolean mipmap, qboolean ansio);
 int R_LoadTextureEx(const char *filepath, const char *name, int *width, int *height, GL_TEXTURETYPE type, qboolean mipmap, qboolean ansio);
+int R_LoadTexture(const char *filepath, const char *name, int *width, int *height, GL_TEXTURETYPE type);
 
 void GL_UploadDXT(byte *data, int width, int height, qboolean mipmap, qboolean ansio);
 int LoadDDS(const char *filename, byte *buf, int bufSize, int *width, int *height);
@@ -296,34 +292,31 @@ int LoadImageGeneric(const char *filename, byte *buf, int bufSize, int *width, i
 int SaveImageGeneric(const char *filename, int width, int height, byte *data);
 
 //framebuffer
-void R_PushFrameBuffer(void);
-void R_PopFrameBuffer(void);
-void R_GLBindFrameBuffer(GLenum target, GLuint framebuffer);
+void GL_PushFrameBuffer(void);
+void GL_PopFrameBuffer(void);
 
 //refdef
 void R_PushRefDef(void);
 void R_UpdateRefDef(void);
 void R_PopRefDef(void);
-float *R_GetSavedViewOrg(void);
 int R_GetDrawPass(void);
 int R_GetSupportExtension(void);
-//void R_LoadRendererEntities(void);
+
 void GL_FreeTexture(gltexture_t *glt);
-void R_InitRefHUD(void);
-void R_PushMatrix(void);
-void R_PopMatrix(void);
+void GL_PushMatrix(void);
+void GL_PopMatrix(void);
+
+void GL_PushDrawState(void);
+void GL_PopDrawState(void);
 
 //for screenshot
 byte *R_GetSCRCaptureBuffer(int *bufsize);
 void CL_ScreenShot_f(void);
 
-//player state for StudioDrawPlayer
-entity_state_t *R_GetPlayerState(int index);
-entity_state_t *R_GetCurrentDrawPlayerState(int parsecount);
-
-extern vec3_t save_vieworg[MAX_SAVEREFDEF_STACK];
-extern vec3_t save_viewang[MAX_SAVEREFDEF_STACK];
-extern int save_refdefstack;
+//for hud or post-processing
+void R_InitGLHUD(void);
 
 extern double g_flFrameTime;
 extern int last_luminance;
+
+extern mplane_t custom_frustum[4];

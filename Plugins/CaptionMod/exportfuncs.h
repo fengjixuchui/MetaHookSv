@@ -20,7 +20,6 @@
 extern cl_enginefunc_t gEngfuncs;
 
 void Steam_Init(void);
-void SteamAPI_Load(void);
 void MSG_Init(void);
 int Initialize(struct cl_enginefuncs_s *pEnginefuncs, int iVersion);
 void HUD_Init(void);
@@ -31,6 +30,7 @@ void Engine_InstallHook(void);
 void BaseUI_InstallHook(void);
 void GameUI_InstallHook(void);
 void ClientVGUI_InstallHook(void);
+void ClientVGUI_Shutdown(void);
 void VGUI1_InstallHook(void);
 void Surface_InstallHook(void);
 void Scheme_InstallHook(void);
@@ -45,5 +45,6 @@ sfx_t *S_FindName(char *name, int *pfInCache);
 int __fastcall SvClient_FindSoundEx(int pthis, int, const char *sound);
 void Sys_ErrorEx(const char *fmt, ...);
 
-extern cvar_t *cap_show;
+extern cvar_t *cap_enabled;
+extern cvar_t *cap_debug;
 extern cvar_t *cap_netmessage;

@@ -25,6 +25,8 @@ void IPlugins::Init(metahook_api_t *pAPI, mh_interface_t *pInterface, mh_engines
 
 void IPlugins::Shutdown(void)
 {
+	R_Shutdown();
+	GL_Shutdown();
 }
 
 void IPlugins::LoadEngine(void)
@@ -47,7 +49,6 @@ void IPlugins::LoadEngine(void)
 	g_dwEngineBase = g_pMetaHookAPI->GetEngineBase();
 	g_dwEngineSize = g_pMetaHookAPI->GetEngineSize();
 
-	Memory_Init();
 	R_FillAddress();
 	R_InstallHook();
 }
@@ -80,7 +81,6 @@ void IPlugins::LoadClient(cl_exportfuncs_t *pExportFunc)
 
 	pExportFunc->HUD_GetStudioModelInterface = HUD_GetStudioModelInterface;
 	pExportFunc->HUD_UpdateClientData = HUD_UpdateClientData;
-	pExportFunc->HUD_AddEntity = HUD_AddEntity;
 	pExportFunc->HUD_Redraw = HUD_Redraw;
 	pExportFunc->HUD_Init = HUD_Init;
 	pExportFunc->HUD_VidInit = HUD_VidInit;
@@ -91,7 +91,7 @@ void IPlugins::LoadClient(cl_exportfuncs_t *pExportFunc)
 
 void IPlugins::ExitGame(int iResult)
 {
-	R_Shutdown();
+	
 }
 
 EXPOSE_SINGLE_INTERFACE(IPlugins, IPlugins, METAHOOK_PLUGIN_API_VERSION);

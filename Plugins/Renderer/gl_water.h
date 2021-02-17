@@ -7,18 +7,60 @@ typedef struct
 	int program;
 	int waterfogcolor;
 	int eyepos;
-	int eyedir;
 	int zmax;
 	int time;
 	int fresnel;
 	int depthfactor;
 	int normfactor;
-	int abovewater;
 	int normalmap;
+	int dudvmap;
 	int refractmap;
 	int reflectmap;	
 	int depthrefrmap;
 }water_program_t;
+
+typedef struct
+{
+	int program;
+	int waterfogcolor;
+	int eyepos;
+	int zmax;
+	int time;
+	int fresnel;
+	int depthfactor;
+	int normfactor;
+	int normalmap;
+	int dudvmap;
+	int refractmap;
+	int reflectmap;
+	int depthrefrmap;
+}watergbuffer_program_t;
+
+typedef struct
+{
+	int program;
+	int waterfogcolor;
+	int eyepos;
+	int zmax;
+	int time;
+	int normfactor;
+	int normalmap;
+	int dudvmap;
+	int refractmap;
+}underwater_program_t;
+
+typedef struct
+{
+	int program;
+	int waterfogcolor;
+	int eyepos;
+	int zmax;
+	int time;
+	int normfactor;
+	int normalmap;
+	int dudvmap;
+	int refractmap;
+}underwatergbuffer_program_t;
 
 typedef struct
 {
@@ -50,6 +92,7 @@ typedef struct r_water_s
 }r_water_t;
 
 //renderer
+extern vec3_t water_view;
 extern qboolean drawreflect;
 extern qboolean drawrefract;
 
@@ -60,8 +103,11 @@ extern r_water_t *waters_active;
 
 //shader
 extern SHADER_DEFINE(water);
+extern SHADER_DEFINE(watergbuffer);
+extern SHADER_DEFINE(underwater);
+extern SHADER_DEFINE(underwatergbuffer);
+
 extern int water_normalmap;
-extern int water_normalmap_default;
 
 extern SHADER_DEFINE(drawdepth);
 
@@ -77,9 +123,20 @@ extern cvar_t *r_water_depthfactor;
 extern cvar_t *r_water_normfactor;
 extern cvar_t *r_water_novis;
 extern cvar_t *r_water_texscale;
+extern cvar_t *r_water_minheight;
 
-void R_AddEntityWater(cl_entity_t *ent, vec3_t p, colorVec *color);
+typedef struct
+{
+	int percent;
+	int destcolor[3];
+}cshift_t;
+
+extern colorVec *gWaterColor;
+extern cshift_t *cshift_water;
+
+r_water_t *R_GetActiveWater(cl_entity_t *ent, vec3_t p, colorVec *color);
 void R_InitWater(void);
+void R_FreeWater(void);
 void R_ClearWater(void);
 void R_RenderWaterView(void);
 void R_EnableClip(qboolean isdrawworld);

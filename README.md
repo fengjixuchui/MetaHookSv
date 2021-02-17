@@ -3,15 +3,15 @@ This is a porting of MetaHook (https://github.com/nagist/metahook) for SvEngine 
 
 Plugin porting is in progress as most signatures/patterns for GoldSrc engine are failed for SvEngine.
 
-* You must shutdown and restart the game manually after changing the video setting, or the game may crash.
-
 ## Installation
 
-All pre-compiled binary and required files are in "Build" folder, copy them to "\SteamLibrary\steamapps\common\Sven Co-op\".
+1. All pre-compiled binary and required files are in "Build" folder, copy them to "\SteamLibrary\steamapps\common\Sven Co-op\".
 
-and launch game from "\SteamLibrary\steamapps\common\Sven Co-op\metahook.exe"
+2. Launch game from "\SteamLibrary\steamapps\common\Sven Co-op\svencoop.exe"
 
-the SDL2.dll fixes a bug that the original SDL's IME input handler was causing buffer overflow and game crash. you don't need to copy it if you don't have a non-english IME.
+* The new "svencoop.exe" is original called "metahook.exe", you can also run game from "metahook.exe -game svencoop" however it will cause game crash when changing video settings.
+
+* The SDL2.dll fixes a bug that the original SDL's IME input handler was causing buffer overflow and game crash. you don't need to copy it if you don't have a non-english IME.
 
 ## Plugins
 
@@ -59,19 +59,23 @@ Current state : Ready to use, more feature are coming soon.
 
 1. High-Dynamic-Range (HDR) post-processor.
 
-2. Water reflection and refraction.
+2. Water reflection and refraction. (Warning: this may cause a significant performance hit.)
 
-3. Per-Object Shadow. (each object render it's own shadow mapping just like how source engine does this.)
+3. Per-Object Shadow. (Warning: this may cause a significant performance hit.)
 
 4. Screen Space Ambient Occlusion (SSAO) using horizon-based ambient occlusion (HBAO). the implementation is taken from nvidia. (not support with -nofbo)
 
 5. MultiSampling Anti-Aliasing (MSAA)
 
+6. Fast Approximate Anti-Aliasing (FXAA) when MSAA is not available.
+
+7. Rendering using Deferred-Shading and Per-Pixel-Lighting technique for all non-transparent objects. "unlimited" (maximum at 256 for SvEngine) dynamic lightsource supported. (not support with -nofbo)
+
 #### Launch Parameters / Commmandline Parameters
 
--nofbo : disable FrameBufferObject rendering. add it if you caught some rendering error.
+-nofbo : disable FrameBufferObject rendering. add it if you caught some rendering error. SSAO and Deferred-Shading will not be available when FBO disabled.
 
--nomsaa : disable MultiSampling Anti-Aliasing (MSAA).
+-nomsaa : disable MultiSampling Anti-Aliasing (MSAA). add it if you caught some performance hit.
 
 -nohdr : disable High-Dynamic-Range (HDR).
 
@@ -107,6 +111,8 @@ r_water_novis 1 / 0 : force engine to render the scene which should have been re
 
 r_water_texscale (0.1 ~ 1.0) : to control the size of refract or reflect view texture.
 
+r_water_minheight : water entity which has height < this value will not be rendered with shader program.
+
 r_shadow 1 / 0 : to enable / disable Per-Object Shadow.
 
 r_shadow_angle_pitch (0.0 ~ 360.0) : to control the angle(pitch) of shadow caster (light source).
@@ -115,22 +121,44 @@ r_shadow_angle_yaw (0.0 ~ 360.0) : to control the angle(yaw) of shadow caster (l
 
 r_shadow_angle_roll (0.0 ~ 360.0) : to control the angle(roll) of shadow caster (light source).
 
-r_shadow_texsize (must be power of 4) : the texture size of shadow map. larger texture supports bigger shadow-caster entity but uses more graphic RAM.
+r_shadow_high_texsize (must be power of 4) : the texture size of high-quality shadow map. larger texture with bigger scale factor has better quality but uses more graphic RAM.
 
-r_shadow_scale (must be power of 2) : scale factor when render shadow-caster entity in shadow map. larger scale factor gets better quality shadow but will cause incorrect render result when the entity is scaled too much.
+r_shadow_high_distance : entities within this distance are rendered into high-quality shadow map.
 
-r_shadow_fardist (0.0 ~ 1000.0) : to determine how far the shadow is going to fade out.
+r_shadow_high_scale : scale factor when render shadow-caster entity in high-quality shadow map. larger scale factor gets better quality shadow but will cause incorrect render result when the entity is scaled too much.
 
-r_shadow_radius : entity don't cast shadow at this distance away from surface.
+r_shadow_medium_texsize (must be power of 4) : the texture size of medium-quality shadow map.
 
-r_shadow_masdist : entity don't cast shadow at this distance away from camera.
+r_shadow_medium_distance : entities within this distance are rendered into medium-quality shadow map.
+
+r_shadow_medium_scale : scale factor when render shadow-caster entity in low-quality shadow map.
+
+r_shadow_low_texsize (must be power of 4) : the texture size of low-quality shadow map.
+
+r_shadow_low_distance : entities within this distance are rendered into low-quality shadow map.
+
+r_shadow_low_scale : scale factor when render shadow-caster entity in medium quality shadow map.
 
 r_ssao 1 / 0 : to enable / disable Screen Space Ambient Occlusion.
 
 r_ssao_intensity : to control the intensity of SSAO shadow.
 
-r_ssao_radius : to control the size of SSAO shadow.
+r_ssao_radius : to control the sample size of SSAO shadow.
 
 r_ssao_blur_sharpness : to control the sharpness of SSAO shadow.
 
 r_ssao_bias : test it yourself.
+
+r_light_dynamic : to enable / disable Deferred-Shading (Dynamic-LightSource support).
+
+r_flashlight_cone : cosine of angle of flashlight cone.
+
+r_flashlight_distance : flashlight's illumination distance.
+
+r_light_ambient : ambient intensity of dynamic light.
+
+r_light_diffuse : diffuse intensity of dynamic light.
+
+r_light_specular : specular intensity of dynamic light.
+
+r_light_specularpow : specular power of dynamic light.

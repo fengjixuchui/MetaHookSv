@@ -11,8 +11,6 @@
 #include "msghook.h"
 #include <algorithm>
 
-#define HUDMESSAGE_MAXLENGTH 2048
-
 using namespace vgui;
 
 CHudMessage m_HudMessage;
@@ -483,16 +481,17 @@ int CHudMessage::MsgFunc_HudText(const char *pszName, int iSize, void *pbuf)
 
 	// Trim off a leading # if it's there
 
-	if (!strncmp(pString, "__NETMESSAGE__", sizeof("__NETMESSAGE__") - 1))
+	if (!V_strncmp(pString, "__NETMESSAGE__", sizeof("__NETMESSAGE__") - 1))
 	{
-		int useSlot = -1;
-		if (isdigit(pString[sizeof("__NETMESSAGE__") - 1]))
-		{
-			useSlot = atoi(&pString[sizeof("__NETMESSAGE__") - 1]);
-		}
-
 		if (cap_netmessage && cap_netmessage->value)
 		{
+			int useSlot = -1;
+			char *slotString = &pString[sizeof("__NETMESSAGE__") - 1];
+			if (isdigit(*slotString))
+			{
+				useSlot = atoi(slotString);
+			}
+
 			client_textmessage_t *pTextMessage = NULL;
 
 			if (pString[0] == '#')
@@ -505,7 +504,7 @@ int CHudMessage::MsgFunc_HudText(const char *pszName, int iSize, void *pbuf)
 
 			dict = g_pViewPort->FindDictionaryRegex(str, DICT_NETMESSAGE, result);
 
-			if (cap_show && cap_show->value)
+			if (cap_debug && cap_debug->value)
 			{
 				gEngfuncs.Con_Printf((dict) ? "CaptionMod: NetMessage [%s] found.\n" : "CaptionMod: NetMessage [%s] not found.\n", pTextMessage->pMessage);
 			}
@@ -515,9 +514,8 @@ int CHudMessage::MsgFunc_HudText(const char *pszName, int iSize, void *pbuf)
 				if (!dict->m_pTextMessage)
 				{
 					dict->m_pTextMessage = new client_textmessage_t;
+					memcpy(dict->m_pTextMessage, pTextMessage, sizeof(*pTextMessage));
 					dict->m_pTextMessage->pMessage = (const char *)new char[HUDMESSAGE_MAXLENGTH];
-
-					memcpy(dict->m_pTextMessage, pTextMessage, sizeof(*pTextMessage) - sizeof(const char *));
 				}
 
 				std::string sentence;
@@ -557,19 +555,17 @@ int CHudMessage::MsgFunc_HudText(const char *pszName, int iSize, void *pbuf)
 				if (!dict->m_pTextMessage)
 				{
 					dict->m_pTextMessage = new client_textmessage_t;
+					memcpy(dict->m_pTextMessage, pTextMessage, sizeof(*pTextMessage));
 					dict->m_pTextMessage->pMessage = (const char *)new char[HUDMESSAGE_MAXLENGTH];
-
-					memcpy(dict->m_pTextMessage, pTextMessage, sizeof(*pTextMessage) - sizeof(const char *));
 				}
 
-				std::string sentence;
-				sentence.resize(HUDMESSAGE_MAXLENGTH);
+				char sentence[HUDMESSAGE_MAXLENGTH];
 
-				int finalLength = localize()->ConvertUnicodeToANSI(dict->m_szSentence.Base(), (char *)sentence.data(), sentence.length());
+				int finalLength = localize()->ConvertUnicodeToANSI(dict->m_szSentence.Base(), (char *)sentence, HUDMESSAGE_MAXLENGTH);
 
-				sentence.resize(finalLength);
+				sentence[finalLength] = 0;
 
-				V_strncpy((char *)dict->m_pTextMessage->pMessage, sentence.data(), HUDMESSAGE_MAXLENGTH - 1);
+				V_strncpy((char *)dict->m_pTextMessage->pMessage, sentence, HUDMESSAGE_MAXLENGTH - 1);
 				((char *)dict->m_pTextMessage->pMessage)[HUDMESSAGE_MAXLENGTH - 1] = 0;
 
 				MessageAdd(dict->m_pTextMessage, cl_time, hintMessage, useSlot, m_hFont);
@@ -577,7 +573,7 @@ int CHudMessage::MsgFunc_HudText(const char *pszName, int iSize, void *pbuf)
 				m_parms.time = cl_time;
 				return 1;
 			}
-			else
+			else if(pTextMessage)
 			{
 				MessageAdd(pTextMessage, cl_time, hintMessage, useSlot, m_hFont);
 				m_parms.time = cl_time;
@@ -591,9 +587,16 @@ int CHudMessage::MsgFunc_HudText(const char *pszName, int iSize, void *pbuf)
 	{
 		dict = g_pViewPort->FindDictionary(pString, DICT_MESSAGE);
 
-		if (cap_show && cap_show->value)
+		if (cap_debug && cap_debug->value)
 		{
 			gEngfuncs.Con_Printf((dict) ? "CaptionMod: TextMessage [%s] found.\n" : "CaptionMod: TextMessage [%s] not found.\n", pString);
+		}
+
+		if (dict)
+		{
+			MessageAdd(dict->m_pTextMessage, cl_time, hintMessage, -1, m_hFont);
+			m_parms.time = cl_time;
+			return 1;
 		}
 	}
 	
@@ -609,7 +612,7 @@ int CHudMessage::MsgFunc_HudTextArgs(const char *pszName, int iSize, void *pbuf)
 
 	CDictionary *dict = g_pViewPort->FindDictionary(pString, DICT_MESSAGE);
 
-	if(cap_show && cap_show->value)
+	if(cap_debug && cap_debug->value)
 	{
 		gEngfuncs.Con_Printf((dict) ? "CaptionMod: TextMessage [%s] found.\n" : "CaptionMod: TextMessage [%s] not found.\n", pString);
 	}

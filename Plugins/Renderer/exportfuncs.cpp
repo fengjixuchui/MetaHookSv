@@ -19,7 +19,7 @@ void Sys_ErrorEx(const char *fmt, ...)
 		gEngfuncs.pfnClientCmd("escape\n");
 
 	MessageBox(NULL, msg, "Error", MB_ICONERROR);
-	exit(0);
+	TerminateProcess((HANDLE)(-1), 0);
 }
 
 int Q_stricmp_slash(const char *s1, const char *s2)
@@ -115,22 +115,15 @@ ref_export_t gRefExports =
 	//common
 	R_GetDrawPass,
 	R_GetSupportExtension,
-	//studio
-	R_GLStudioDrawPointsEx,
-	R_GetPlayerState,
 	//refdef
 	R_PushRefDef,
-	R_UpdateRefDef,
 	R_PopRefDef,
-	R_GetSavedViewOrg,
 	R_GetRefDef,
 	//framebuffer
-	R_PushFrameBuffer,
-	R_PopFrameBuffer,
-	R_GLBindFrameBuffer,
+	GL_PushFrameBuffer,
+	GL_PopFrameBuffer,
 	//texture
-	R_GLGenTextureRGBA8,
-	R_GetTexLoaderBuffer,
+	GL_GenTextureRGBA8,
 	R_LoadTextureEx,
 	GL_LoadTextureEx,
 	R_GetCurrentGLTexture,
@@ -240,31 +233,30 @@ void V_CalcRefdef(struct ref_params_s *pparams)
 void HUD_DrawNormalTriangles(void)
 {
 	gExportfuncs.HUD_DrawNormalTriangles();
+
+	if (drawgbuffer)
+	{
+		R_EndRenderGBuffer();
+	}
+
+	if (!drawreflect && !drawrefract)
+	{
+		R_RenderShadowScenes();
+	}
 }
 
 void HUD_DrawTransparentTriangles(void)
 {
-	if (!drawreflect && !drawrefract && !drawshadow)
+	if (!drawreflect && !drawrefract)
 	{
 		R_FreeDeadWaters();
-	}
-
-	gExportfuncs.HUD_DrawTransparentTriangles();
-
-	if (!drawreflect && !drawrefract && !drawshadow)
-	{
-		R_RenderAllShadowScenes();
-
-		for (shadowlight_t *sl = sdlights_active; sl; sl = sl->next)
-		{
-			sl->free = true;
-		}
-
 		for (r_water_t *water = waters_active; water; water = water->next)
 		{
 			water->free = true;
 		}
 	}
+
+	gExportfuncs.HUD_DrawTransparentTriangles();
 }
 
 int HUD_Redraw(float time, int intermission)
@@ -313,14 +305,14 @@ int HUD_Redraw(float time, int intermission)
 			qglUseProgramObjectARB(0);
 		}
 	}
-	else if(sdlights_active && r_shadow_debug && r_shadow_debug->value)
+	else if(r_shadow_debug && r_shadow_debug->value)
 	{
 		qglDisable(GL_BLEND);
 		qglDisable(GL_ALPHA_TEST);
 		qglColor4f(1,1,1,1);
 
 		qglEnable(GL_TEXTURE_2D);
-		qglBindTexture(GL_TEXTURE_2D, sdlights_active->depthmap);
+		qglBindTexture(GL_TEXTURE_2D, shadow_depthmap_high);
 
 		qglUseProgramObjectARB(drawdepth.program);
 
@@ -358,6 +350,41 @@ int HUD_Redraw(float time, int intermission)
 		qglVertex3f(0,glheight/2,0);
 		qglEnd();
 		qglEnable(GL_ALPHA_TEST);
+	}
+	else if(r_light_debug && r_light_debug->value)
+	{
+		qglDisable(GL_BLEND);
+		qglDisable(GL_ALPHA_TEST);
+		qglColor4f(1,1,1,1);
+
+		qglEnable(GL_TEXTURE_2D);
+		if(r_light_debug->value == 1)
+			qglBindTexture(GL_TEXTURE_2D, s_GBufferFBO.s_hBackBufferTex);
+		else if (r_light_debug->value == 2)
+			qglBindTexture(GL_TEXTURE_2D, s_GBufferFBO.s_hBackBufferTex2);
+		else if (r_light_debug->value == 3)
+			qglBindTexture(GL_TEXTURE_2D, s_GBufferFBO.s_hBackBufferTex3);
+		else if (r_light_debug->value == 4)
+			qglBindTexture(GL_TEXTURE_2D, s_GBufferFBO.s_hBackBufferTex4);
+		else
+		{
+			qglUseProgramObjectARB(drawdepth.program);
+			qglBindTexture(GL_TEXTURE_2D, s_GBufferFBO.s_hBackBufferDepthTex);
+		}
+
+		qglBegin(GL_QUADS);
+		qglTexCoord2f(0,1);
+		qglVertex3f(0,0,0);
+		qglTexCoord2f(1,1);
+		qglVertex3f(glwidth/2,0,0);
+		qglTexCoord2f(1,0);
+		qglVertex3f(glwidth/2,glheight/2,0);
+		qglTexCoord2f(0,0);
+		qglVertex3f(0,glheight/2,0);
+		qglEnd();
+		qglEnable(GL_ALPHA_TEST);
+
+		qglUseProgramObjectARB(0);
 	}
 	else if(r_hdr_debug && r_hdr_debug->value)
 	{
@@ -458,15 +485,24 @@ int HUD_GetStudioModelInterface(int version, struct r_studio_interface_s **ppint
 	DWORD addr;
 
 	//Save StudioAPI Funcs
-	gRefFuncs.studioapi_StudioDrawPoints = pstudio->StudioDrawPoints;
-	gRefFuncs.studioapi_StudioSetupLighting = pstudio->StudioSetupLighting;
 	gRefFuncs.studioapi_SetupRenderer = pstudio->SetupRenderer;
 	gRefFuncs.studioapi_RestoreRenderer = pstudio->RestoreRenderer;
+	gRefFuncs.studioapi_StudioDynamicLight = pstudio->StudioDynamicLight;
 
 	//Vars in Engine Studio API
 	addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)pstudio->GetCurrentEntity, 0x10, "\xA1", 1);
 	Sig_AddrNotFound("currententity");
 	currententity = *(cl_entity_t ***)(addr + 0x1);
+
+	addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)pstudio->GetTimes, 0x10, "\xA1\x2A\x2A\x2A\x2A\x89", 6);
+	Sig_AddrNotFound("r_framecount");
+	r_framecount = *(int **)(addr + 1);
+
+	addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)addr, 0x20, "\xDD\x05\x2A\x2A\x2A\x2A\xDD\x18", 8);
+	cl_time = *(double **)(addr + 2);
+
+	addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)(addr + 8) , 0x20, "\xDD\x05\x2A\x2A\x2A\x2A\xDD\x18", 8);
+	cl_oldtime = *(double **)(addr + 2);
 
 	addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)pstudio->SetRenderModel, 0x10, "\xA3", 1);
 	Sig_AddrNotFound("r_model");
@@ -490,8 +526,27 @@ int HUD_GetStudioModelInterface(int version, struct r_studio_interface_s **ppint
 	Sig_AddrNotFound("r_blend");
 	r_blend = *(float **)(addr + 2);
 
+#define G_CHROMEORIGIN_SIG_SVENGINE "\xD9\x05\x2A\x2A\x2A\x2A\xD9\x1D"
+	addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)pstudio->SetChromeOrigin, 0x150, G_CHROMEORIGIN_SIG_SVENGINE, sizeof(G_CHROMEORIGIN_SIG_SVENGINE) - 1);
+	Sig_AddrNotFound("g_ChromeOrigin");
+	g_ChromeOrigin = *(decltype(g_ChromeOrigin) *)(addr + 8);
+
 	pbonetransform = (float (*)[MAXSTUDIOBONES][3][4])pstudio->StudioGetBoneTransform();
 	plighttransform = (float (*)[MAXSTUDIOBONES][3][4])pstudio->StudioGetLightTransform();
+
+	if (g_iEngineType == ENGINE_SVENGINE)
+	{
+#define PSUBMODEL_SIG_SVENGINE "\xC7\x00\x2A\x2A\x2A\x2A\xC3"
+		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)pstudio->StudioSetupModel, 0x50, PSUBMODEL_SIG_SVENGINE, sizeof(PSUBMODEL_SIG_SVENGINE) - 1);
+		Sig_AddrNotFound("psubmodel");
+		psubmodel = *(decltype(psubmodel)*)(addr + 2);
+
+#define R_COLORMIX_SIG_SVENGINE "\xD9\x46\x08\xD9\x1D\x2A\x2A\x2A\x2A\xD9\x46\x0C"
+		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)pstudio->StudioSetupLighting, 0x150, R_COLORMIX_SIG_SVENGINE, sizeof(R_COLORMIX_SIG_SVENGINE) - 1);
+		Sig_AddrNotFound("psubmodel");
+		r_colormix = *(decltype(r_colormix)*)(addr + 5);
+
+	}
 
 	cl_viewent = gEngfuncs.GetViewModel();
 
@@ -500,15 +555,18 @@ int HUD_GetStudioModelInterface(int version, struct r_studio_interface_s **ppint
 	gpStudioInterface = ppinterface;
 
 	//InlineHook StudioAPI
-	//InstallHook(studioapi_StudioDrawPoints);
-	//InstallHook(studioapi_StudioSetupLighting);
-	//InstallHook(studioapi_SetupRenderer);
-	//InstallHook(studioapi_RestoreRenderer);
+	InstallHook(studioapi_SetupRenderer);
+	InstallHook(studioapi_RestoreRenderer);
+	InstallHook(studioapi_StudioDynamicLight);
 
-	R_InitDetailTextures();
+	//R_InitDetailTextures();
 	//Load global extra textures into array
 	R_LoadExtraTextureFile(false);
 	R_LoadStudioTextures(false);
+
+	cl_sprite_white = IEngineStudio.Mod_ForName("sprites/white.spr", 1);
+
+	cl_shellchrome = IEngineStudio.Mod_ForName("sprites/shellchrome.spr", 1);
 
 	return gExportfuncs.HUD_GetStudioModelInterface(version, ppinterface, pstudio);
 }
@@ -521,35 +579,10 @@ int HUD_UpdateClientData(client_data_t *pcldata, float flTime)
 
 int HUD_AddEntity(int type, cl_entity_t *ent, const char *model)
 {
-	if(r_shadow && r_shadow->value && shadow.program && (type == 0 || type == 1))//NORMAL OR PLAYER
-	{
-		R_AddEntityShadow(ent, model);
-	}
-#if 0
-	if(r_3dsky_parm.enable)
-	{
-		if(ent->curstate.origin[0] + ent->curstate.maxs[0] > r_3dsky_parm.mins[0] && 
-			ent->curstate.origin[1] + ent->curstate.maxs[1] > r_3dsky_parm.mins[1] &&
-			ent->curstate.origin[2] + ent->curstate.maxs[2] > r_3dsky_parm.mins[2] && 
-			ent->curstate.origin[0] + ent->curstate.mins[0] < r_3dsky_parm.maxs[0] && 
-			ent->curstate.origin[1] + ent->curstate.mins[1] < r_3dsky_parm.maxs[1] && 
-			ent->curstate.origin[2] + ent->curstate.mins[2] < r_3dsky_parm.maxs[2])
-		{
-			if(!r_3dsky || !r_3dsky->value)
-				return 0;
-
-			R_Add3DSkyEntity(ent);
-		}
-	}
-#endif
 	return gExportfuncs.HUD_AddEntity(type, ent, model);
 }
 
 void HUD_Frame(double time)
 {
-	for(shadowlight_t *sl = sdlights_active; sl; sl = sl->next)
-	{
-		sl->free = true;
-	}
 	return gExportfuncs.HUD_Frame(time);
 }
