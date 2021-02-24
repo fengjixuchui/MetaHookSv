@@ -1,8 +1,9 @@
 #include "gl_local.h"
 
 int r_light_env_color[4] = { 0 };
+qboolean r_light_env_color_exists = false;
 vec3_t r_light_env_angles = {0};
-qboolean r_light_env_enabled = false;
+qboolean r_light_env_angles_exists = false;
 
 cvar_t *r_light_dynamic = NULL;
 cvar_t *r_light_debug = NULL;
@@ -21,6 +22,7 @@ bool drawgbuffer = false;
 SHADER_DEFINE(gbuffer1);
 SHADER_DEFINE(gbuffer2);
 SHADER_DEFINE(gbuffer3);
+SHADER_DEFINE(gbuffer4);
 SHADER_DEFINE(dlight_spot);
 SHADER_DEFINE(dlight_point);
 SHADER_DEFINE(dlight_final);
@@ -29,105 +31,77 @@ void R_InitLight(void)
 {
 	if (gl_shader_support)
 	{
-		char *gbuffer_vscode = (char *)gEngfuncs.COM_LoadFile("resource\\shader\\gbuffer_shader.vsh", 5, 0);
-		char *gbuffer_fscode = (char *)gEngfuncs.COM_LoadFile("resource\\shader\\gbuffer_shader.fsh", 5, 0);
-
-		if (!gbuffer_vscode)
+		gbuffer1.program = R_CompileShaderFile("resource\\shader\\gbuffer_shader.vsh", NULL, "resource\\shader\\gbuffer_shader.fsh");
+		if (gbuffer1.program)
 		{
-			Sys_ErrorEx("shader file \"resource\\shader\\gbuffer_shader.vsh\" not found!");
+			SHADER_UNIFORM(gbuffer1, diffuseTex, "diffuseTex");
 		}
-		if (!gbuffer_fscode)
+		gbuffer2.program = R_CompileShaderFileEx("resource\\shader\\gbuffer_shader.vsh", NULL, "resource\\shader\\gbuffer_shader.fsh",
+			"#define LIGHTMAP_ENABLED", NULL, "#define LIGHTMAP_ENABLED");
+		if (gbuffer2.program)
 		{
-			Sys_ErrorEx("shader file \"resource\\shader\\gbuffer_shader.fsh\" not found!");
+			SHADER_UNIFORM(gbuffer2, diffuseTex, "diffuseTex");
+			SHADER_UNIFORM(gbuffer2, lightmapTex, "lightmapTex");
 		}
-
-		if (gbuffer_vscode && gbuffer_fscode)
+		gbuffer3.program = R_CompileShaderFileEx("resource\\shader\\gbuffer_shader.vsh", NULL, "resource\\shader\\gbuffer_shader.fsh",
+			"#define LIGHTMAP_ENABLED\n#define DETAILTEXTURE_ENABLED", NULL, "#define LIGHTMAP_ENABLED\n#define DETAILTEXTURE_ENABLED");
+		if (gbuffer3.program)
 		{
-			gbuffer1.program = R_CompileShaderEx(gbuffer_vscode, gbuffer_fscode, "gbuffer_shader.vsh", "gbuffer_shader.fsh", "", "");
-			if (gbuffer1.program)
-			{
-				SHADER_UNIFORM(gbuffer1, diffuseTex, "diffuseTex");
-			}
-			gbuffer2.program = R_CompileShaderEx(gbuffer_vscode, gbuffer_fscode, "gbuffer_shader.vsh", "gbuffer_shader.fsh",
-				"#define LIGHTMAP_ENABLED", "#define LIGHTMAP_ENABLED");
-			if (gbuffer2.program)
-			{
-				SHADER_UNIFORM(gbuffer2, diffuseTex, "diffuseTex");
-				SHADER_UNIFORM(gbuffer2, lightmapTex, "lightmapTex");
-			}
-			gbuffer3.program = R_CompileShaderEx(gbuffer_vscode, gbuffer_fscode, "gbuffer_shader.vsh", "gbuffer_shader.fsh",
-				"#define LIGHTMAP_ENABLED\n#define DETAILTEXTURE_ENABLED", "#define LIGHTMAP_ENABLED\n#define DETAILTEXTURE_ENABLED");
-			if (gbuffer3.program)
-			{
-				SHADER_UNIFORM(gbuffer3, diffuseTex, "diffuseTex");
-				SHADER_UNIFORM(gbuffer3, lightmapTex, "lightmapTex");
-				SHADER_UNIFORM(gbuffer3, detailTex, "detailTex");
-			}
-			gEngfuncs.COM_FreeFile((void *)gbuffer_vscode);
-			gEngfuncs.COM_FreeFile((void *)gbuffer_fscode);
+			SHADER_UNIFORM(gbuffer3, diffuseTex, "diffuseTex");
+			SHADER_UNIFORM(gbuffer3, lightmapTex, "lightmapTex");
+			SHADER_UNIFORM(gbuffer3, detailTex, "detailTex");
+		}
+		gbuffer4.program = R_CompileShaderFileEx("resource\\shader\\gbuffer_shader.vsh", NULL, "resource\\shader\\gbuffer_shader.fsh",
+			"#define TRANSPARENT_ENABLED", NULL, "#define TRANSPARENT_ENABLED");
+		if (gbuffer4.program)
+		{
+			SHADER_UNIFORM(gbuffer4, diffuseTex, "diffuseTex");
 		}
 	}
 
 	if (gl_shader_support)
 	{
-		char *dlight_vscode = (char *)gEngfuncs.COM_LoadFile("resource\\shader\\dlight_shader.vsh", 5, 0);
-		char *dlight_fscode = (char *)gEngfuncs.COM_LoadFile("resource\\shader\\dlight_shader.fsh", 5, 0);
-
-		if (!dlight_vscode)
+		dlight_spot.program = R_CompileShaderFileEx("resource\\shader\\dlight_shader.vsh", NULL, "resource\\shader\\dlight_shader.fsh",
+			"#define LIGHT_PASS", NULL, "#define LIGHT_PASS\n#define LIGHT_PASS_SPOT");
+		if (dlight_spot.program)
 		{
-			Sys_ErrorEx("shader file \"resource\\shader\\dlight_shader.vsh\" not found!");
+			SHADER_UNIFORM(dlight_spot, positionTex, "positionTex");
+			SHADER_UNIFORM(dlight_spot, normalTex, "normalTex");
+			SHADER_UNIFORM(dlight_spot, viewpos, "viewpos");
+			SHADER_UNIFORM(dlight_spot, lightdir, "lightdir");
+			SHADER_UNIFORM(dlight_spot, lightpos, "lightpos");
+			SHADER_UNIFORM(dlight_spot, lightcolor, "lightcolor");
+			SHADER_UNIFORM(dlight_spot, lightcone, "lightcone");
+			SHADER_UNIFORM(dlight_spot, lightradius, "lightradius");
+			SHADER_UNIFORM(dlight_spot, lightambient, "lightambient");
+			SHADER_UNIFORM(dlight_spot, lightdiffuse, "lightdiffuse");
+			SHADER_UNIFORM(dlight_spot, lightspecular, "lightspecular");
+			SHADER_UNIFORM(dlight_spot, lightspecularpow, "lightspecularpow");
 		}
-		if (!dlight_fscode)
+
+		dlight_point.program = R_CompileShaderFileEx("resource\\shader\\dlight_shader.vsh", NULL, "resource\\shader\\dlight_shader.fsh",
+			"#define LIGHT_PASS", NULL, "#define LIGHT_PASS\n#define LIGHT_PASS_POINT");
+		if (dlight_point.program)
 		{
-			Sys_ErrorEx("shader file \"resource\\shader\\dlight_shader.fsh\" not found!");
+			SHADER_UNIFORM(dlight_point, positionTex, "positionTex");
+			SHADER_UNIFORM(dlight_point, normalTex, "normalTex");
+			SHADER_UNIFORM(dlight_point, viewpos, "viewpos");
+			SHADER_UNIFORM(dlight_point, lightpos, "lightpos");
+			SHADER_UNIFORM(dlight_point, lightcolor, "lightcolor");
+			SHADER_UNIFORM(dlight_point, lightradius, "lightradius");
+			SHADER_UNIFORM(dlight_point, lightambient, "lightambient");
+			SHADER_UNIFORM(dlight_point, lightdiffuse, "lightdiffuse");
+			SHADER_UNIFORM(dlight_point, lightspecular, "lightspecular");
+			SHADER_UNIFORM(dlight_point, lightspecularpow, "lightspecularpow");
 		}
 
-		if (dlight_vscode && dlight_fscode)
+		dlight_final.program = R_CompileShaderFileEx("resource\\shader\\dlight_shader.vsh", NULL, "resource\\shader\\dlight_shader.fsh",
+			"#define FINAL_PASS", NULL, "#define FINAL_PASS");
+		if (dlight_final.program)
 		{
-			dlight_spot.program = R_CompileShaderEx(dlight_vscode, dlight_fscode, "dlight_shader.vsh", "dlight_shader.fsh", 
-				"#define LIGHT_PASS", "#define LIGHT_PASS\n#define LIGHT_PASS_SPOT");
-			if (dlight_spot.program)
-			{
-				SHADER_UNIFORM(dlight_spot, positionTex, "positionTex");
-				SHADER_UNIFORM(dlight_spot, normalTex, "normalTex");
-				SHADER_UNIFORM(dlight_spot, viewpos, "viewpos");
-				SHADER_UNIFORM(dlight_spot, lightdir, "lightdir");
-				SHADER_UNIFORM(dlight_spot, lightpos, "lightpos");
-				SHADER_UNIFORM(dlight_spot, lightcolor, "lightcolor");
-				SHADER_UNIFORM(dlight_spot, lightcone, "lightcone");
-				SHADER_UNIFORM(dlight_spot, lightradius, "lightradius");
-				SHADER_UNIFORM(dlight_spot, lightambient, "lightambient");
-				SHADER_UNIFORM(dlight_spot, lightdiffuse, "lightdiffuse");
-				SHADER_UNIFORM(dlight_spot, lightspecular, "lightspecular");
-				SHADER_UNIFORM(dlight_spot, lightspecularpow, "lightspecularpow");
-			}
-
-			dlight_point.program = R_CompileShaderEx(dlight_vscode, dlight_fscode, "dlight_shader.vsh", "dlight_shader.fsh",
-				"#define LIGHT_PASS", "#define LIGHT_PASS\n#define LIGHT_PASS_POINT");
-			if (dlight_point.program)
-			{
-				SHADER_UNIFORM(dlight_point, positionTex, "positionTex");
-				SHADER_UNIFORM(dlight_point, normalTex, "normalTex");
-				SHADER_UNIFORM(dlight_point, viewpos, "viewpos");
-				SHADER_UNIFORM(dlight_point, lightpos, "lightpos");
-				SHADER_UNIFORM(dlight_point, lightcolor, "lightcolor");
-				SHADER_UNIFORM(dlight_point, lightradius, "lightradius");
-				SHADER_UNIFORM(dlight_point, lightambient, "lightambient");
-				SHADER_UNIFORM(dlight_point, lightdiffuse, "lightdiffuse");
-				SHADER_UNIFORM(dlight_point, lightspecular, "lightspecular");
-				SHADER_UNIFORM(dlight_point, lightspecularpow, "lightspecularpow");
-			}
-
-			dlight_final.program = R_CompileShaderEx(dlight_vscode, dlight_fscode, "dlight_shader.vsh", "dlight_shader.fsh", 
-				"#define FINAL_PASS", "#define FINAL_PASS");
-			if (dlight_final.program)
-			{
-				SHADER_UNIFORM(dlight_final, diffuseTex, "diffuseTex");
-				SHADER_UNIFORM(dlight_final, lightmapTex, "lightmapTex");
-				SHADER_UNIFORM(dlight_final, depthTex, "depthTex");
-			}
-			gEngfuncs.COM_FreeFile((void *)dlight_vscode);
-			gEngfuncs.COM_FreeFile((void *)dlight_fscode);
+			SHADER_UNIFORM(dlight_final, diffuseTex, "diffuseTex");
+			SHADER_UNIFORM(dlight_final, lightmapTex, "lightmapTex");
+			SHADER_UNIFORM(dlight_final, depthTex, "depthTex");
 		}
 	}
 
@@ -140,7 +114,8 @@ void R_InitLight(void)
 	r_light_env_angles[1] = 0;
 	r_light_env_angles[2] = 0;
 
-	r_light_env_enabled = false;
+	r_light_env_color_exists = false;
+	r_light_env_angles_exists = false;
 
 	r_light_dynamic = gEngfuncs.pfnRegisterVariable("r_light_dynamic", "1", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_light_debug = gEngfuncs.pfnRegisterVariable("r_light_debug", "0", FCVAR_CLIENTDLL);
@@ -231,6 +206,11 @@ void R_SetGBufferRenderState(int state)
 		qglUniform1iARB(gbuffer3.diffuseTex, 0);
 		qglUniform1iARB(gbuffer3.lightmapTex, 1);
 		qglUniform1iARB(gbuffer3.detailTex, 2);
+	}
+	else if (state == 4)
+	{
+		qglUseProgramObjectARB(gbuffer4.program);
+		qglUniform1iARB(gbuffer4.diffuseTex, 0);
 	}
 }
 

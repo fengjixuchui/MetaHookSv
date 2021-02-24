@@ -1,8 +1,9 @@
 #pragma once
 
 extern int r_light_env_color[4];
+extern qboolean r_light_env_color_exists;
 extern vec3_t r_light_env_angles;
-extern qboolean r_light_env_enabled;
+extern qboolean r_light_env_angles_exists;
 extern cvar_t *r_light_dynamic;
 extern cvar_t *r_light_debug;
 extern bool drawpolynocolor;
@@ -28,6 +29,12 @@ typedef struct
 	int lightmapTex;
 	int detailTex;
 }gbuffer3_program_t;
+
+typedef struct
+{
+	int program;
+	int diffuseTex;
+}gbuffer4_program_t;
 
 typedef struct
 {

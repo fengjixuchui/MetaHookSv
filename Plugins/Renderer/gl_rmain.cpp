@@ -8,6 +8,9 @@ refdef_t *r_refdef;
 
 ref_params_t r_params;
 
+int saved_c_alias_polys;
+int saved_c_brush_polys;
+
 float gldepthmin, gldepthmax;
 
 cl_entity_t *r_worldentity;
@@ -161,9 +164,11 @@ cvar_t *gl_round_down = NULL;
 cvar_t *gl_picmip = NULL;
 cvar_t *gl_max_size = NULL;
 
+cvar_t *v_texgamma = NULL;
 cvar_t *v_lightgamma = NULL;
 cvar_t *v_brightness = NULL;
 cvar_t *v_gamma = NULL;
+cvar_t *v_lambert = NULL;
 
 cvar_t *cl_righthand = NULL;
 
@@ -1580,6 +1585,8 @@ void R_PreRenderView()
 {
 	if (!r_refdef->onlyClientDraws)
 	{
+		(*c_alias_polys) = 0;
+		(*c_brush_polys) = 0;
 		if (water.program && r_water && r_water->value)
 		{
 			R_RenderWaterView();
@@ -1588,6 +1595,8 @@ void R_PreRenderView()
 		{
 			R_RenderShadowMap();
 		}
+		saved_c_alias_polys = (*c_alias_polys);
+		saved_c_brush_polys = (*c_brush_polys);
 	}
 
 	if (s_BackBufferFBO.s_hBackBufferFBO)
@@ -1601,6 +1610,12 @@ void R_PreRenderView()
 
 void R_PostRenderView()
 {
+	if (!r_refdef->onlyClientDraws)
+	{
+		(*c_alias_polys) += saved_c_alias_polys;
+		(*c_brush_polys) += saved_c_brush_polys;
+	}
+
 	if (s_BackBufferFBO.s_hBackBufferFBO)
 	{
 		if (s_MSAAFBO.s_hBackBufferFBO)
@@ -1872,9 +1887,11 @@ void R_InitCvars(void)
 		}
 	}
 
+	v_texgamma = gEngfuncs.pfnGetCvarPointer("texgamma");
 	v_lightgamma = gEngfuncs.pfnGetCvarPointer("lightgamma");
 	v_brightness = gEngfuncs.pfnGetCvarPointer("brightness");
 	v_gamma = gEngfuncs.pfnGetCvarPointer("gamma");
+	v_lambert = gEngfuncs.pfnGetCvarPointer("lambert");
 
 	cl_righthand = gEngfuncs.pfnGetCvarPointer("cl_righthand");
 }

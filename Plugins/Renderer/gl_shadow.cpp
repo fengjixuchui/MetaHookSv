@@ -80,36 +80,20 @@ void R_InitShadow(void)
 {
 	if(gl_shader_support)
 	{
-		const char *shadow_vscode = (const char *)gEngfuncs.COM_LoadFile("resource\\shader\\shadow_shader.vsh", 5, 0);
-		const char *shadow_fscode = (const char *)gEngfuncs.COM_LoadFile("resource\\shader\\shadow_shader.fsh", 5, 0);
-		if(shadow_vscode && shadow_fscode)
+		shadow.program = R_CompileShaderFile("resource\\shader\\shadow_shader.vsh", NULL, "resource\\shader\\shadow_shader.fsh");
+		if (shadow.program)
 		{
-			shadow.program = R_CompileShader(shadow_vscode, shadow_fscode, "shadow_shader.vsh", "shadow_shader.fsh");
-			if(shadow.program)
-			{
-				SHADER_UNIFORM(shadow, texoffset_high, "texoffset_high");
-				SHADER_UNIFORM(shadow, texoffset_medium, "texoffset_medium");
-				SHADER_UNIFORM(shadow, texoffset_low, "texoffset_low");
-				SHADER_UNIFORM(shadow, depthmap_high, "depthmap_high");
-				SHADER_UNIFORM(shadow, depthmap_medium, "depthmap_medium");
-				SHADER_UNIFORM(shadow, depthmap_low, "depthmap_low");
-				SHADER_UNIFORM(shadow, numedicts_high, "numedicts_high");
-				SHADER_UNIFORM(shadow, numedicts_medium, "numedicts_medium");
-				SHADER_UNIFORM(shadow, numedicts_low, "numedicts_low");
-				SHADER_UNIFORM(shadow, alpha, "alpha");
-			}
+			SHADER_UNIFORM(shadow, texoffset_high, "texoffset_high");
+			SHADER_UNIFORM(shadow, texoffset_medium, "texoffset_medium");
+			SHADER_UNIFORM(shadow, texoffset_low, "texoffset_low");
+			SHADER_UNIFORM(shadow, depthmap_high, "depthmap_high");
+			SHADER_UNIFORM(shadow, depthmap_medium, "depthmap_medium");
+			SHADER_UNIFORM(shadow, depthmap_low, "depthmap_low");
+			SHADER_UNIFORM(shadow, numedicts_high, "numedicts_high");
+			SHADER_UNIFORM(shadow, numedicts_medium, "numedicts_medium");
+			SHADER_UNIFORM(shadow, numedicts_low, "numedicts_low");
+			SHADER_UNIFORM(shadow, alpha, "alpha");
 		}
-
-		if (!shadow_vscode)
-		{
-			Sys_ErrorEx("shader file \"resource\\shader\\shadow_shader.vsh\" not found!");
-		}
-		if (!shadow_fscode)
-		{
-			Sys_ErrorEx("shader file \"resource\\shader\\shadow_shader.fsh\" not found!");
-		}
-		gEngfuncs.COM_FreeFile((void *)shadow_vscode);
-		gEngfuncs.COM_FreeFile((void *)shadow_fscode);
 	}
 
 	r_shadow = gEngfuncs.pfnRegisterVariable("r_shadow", "1", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
@@ -206,7 +190,7 @@ void R_RenderShadowMap(void)
 
 	vec3_t sangles;
 
-	if (r_light_env_enabled && r_shadow_map_override->value)
+	if (r_light_env_angles_exists && r_shadow_map_override->value)
 	{
 		sangles[0] = r_light_env_angles[0];
 		sangles[1] = r_light_env_angles[1];
@@ -282,6 +266,8 @@ void R_RenderShadowMap(void)
 	qglEnable(GL_POLYGON_OFFSET_FILL);
 	qglDisable(GL_CULL_FACE);
 
+	drawpolynocolor = true;
+
 	for (int i = 0; i < 3; ++i)
 	{
 		qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowmapArray[i], 0);
@@ -330,6 +316,8 @@ void R_RenderShadowMap(void)
 
 		qglColorMask(1, 1, 1, 1);
 	}
+
+	drawpolynocolor = false;
 
 	qglEnable(GL_CULL_FACE);
 	qglDisable(GL_POLYGON_OFFSET_FILL);
@@ -775,12 +763,10 @@ void R_RenderShadowScenes(void)
 
 	//restore texture 2
 	qglActiveTextureARB(TEXTURE2_SGIS);
-
 	qglMatrixMode(GL_TEXTURE);
 	qglLoadIdentity();
-
+	qglMatrixMode(GL_MODELVIEW);
 	qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, texture2_env);
-
 	qglBindTexture(GL_TEXTURE_2D, 0);
 	qglDisable(GL_TEXTURE_GEN_S);
 	qglDisable(GL_TEXTURE_GEN_T);
@@ -790,29 +776,25 @@ void R_RenderShadowScenes(void)
 
 	//restore texture 1
 	qglActiveTextureARB(TEXTURE1_SGIS);
-
 	qglMatrixMode(GL_TEXTURE);
 	qglLoadIdentity();
-
+	qglMatrixMode(GL_MODELVIEW);
 	qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, texture1_env);
-
 	qglBindTexture(GL_TEXTURE_2D, 0);
 	qglDisable(GL_TEXTURE_GEN_S);
 	qglDisable(GL_TEXTURE_GEN_T);
 	qglDisable(GL_TEXTURE_GEN_R);
 	qglDisable(GL_TEXTURE_GEN_Q);
-	GL_DisableMultitexture();
-
-	qglMatrixMode(GL_TEXTURE);
-	qglLoadIdentity();
 
 	//restore texture 0
+	GL_DisableMultitexture();
+	qglMatrixMode(GL_TEXTURE);
+	qglLoadIdentity();
+	qglMatrixMode(GL_MODELVIEW);
 	qglDisable(GL_TEXTURE_GEN_S);
 	qglDisable(GL_TEXTURE_GEN_T);
 	qglDisable(GL_TEXTURE_GEN_R);
 	qglDisable(GL_TEXTURE_GEN_Q);
-
-	qglMatrixMode(GL_MODELVIEW);
 
 	GL_PopDrawState();
 }

@@ -1,6 +1,8 @@
 #include "gl_local.h"
 #include <metahook.h>
 
+#define CACHE_FREE_SVENGINE "\x56\x57\x8B\x7C\x24\x0C\x8B\x37\x85\xF6\x2A\x2A\x68\x2A\x2A\x2A\x2A\xE8"
+
 #define R_CLEAR_SIG "\xD9\x05\x2A\x2A\x2A\x2A\xDC\x1D\x2A\x2A\x2A\x2A\xDF\xE0\xF6\xC4\x2A\x2A\x2A\xD9\x05\x2A\x2A\x2A\x2A\xD8\x1D\x2A\x2A\x2A\x2A\xDF\xE0"
 #define R_CLEAR_SIG2 "\x8B\x15\x2A\x2A\x2A\x2A\x33\xC0\x83\xFA\x01\x0F\x9F\xC0\x50\xE8\x2A\x2A\x2A\x2A\xD9\x05\x2A\x2A\x2A\x2A\xDC\x1D\x2A\x2A\x2A\x2A\x83\xC4\x04\xDF\xE0"
 #define R_CLEAR_SIG_NEW "\x8B\x15\x2A\x2A\x2A\x2A\x33\xC0\x83\xFA\x01\x0F\x9F\xC0\x50\xE8\x2A\x2A\x2A\x2A\xD9\x05\x2A\x2A\x2A\x2A\xDC\x1D\x2A\x2A\x2A\x2A\x83\xC4\x04"
@@ -223,6 +225,9 @@ void R_FillAddress(void)
 
 	if (g_iEngineType == ENGINE_SVENGINE)
 	{
+		gRefFuncs.Cache_Free = (void(*)(cache_user_t *))Search_Pattern(CACHE_FREE_SVENGINE);
+		Sig_FuncNotFound(Cache_Free);
+
 		gRefFuncs.GL_Bind = (void(*)(int))Search_Pattern(GL_BIND_SIG_SVENGINE);
 		Sig_FuncNotFound(GL_Bind);
 
@@ -966,14 +971,6 @@ void R_FillAddress(void)
 		Sig_AddrNotFound(r_dlightactive);
 		r_dlightactive = *(int **)(addr + 2);
 		
-		//R_RenderDynamicLightmaps
-//mov     ecx, c_brush_polys
-//push    ebx
-#define C_BRUSH_POLYS_SIG_SVENGINE "\x8B\x2A\x2A\x2A\xFF\x05"
-		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_RenderDynamicLightmaps, 0x30, C_BRUSH_POLYS_SIG_SVENGINE, sizeof(C_BRUSH_POLYS_SIG_SVENGINE) - 1);
-		Sig_AddrNotFound(c_brush_polys);
-		c_brush_polys = *(int **)(addr + 6);
-
 		//and     eax, 0FFh
 		//mov     eax, d_lightstylevalue[eax*4]
 #define D_LIGHTSTYLEVALUE_SIG_SVENGINE "\x3C\xFF\x2A\x2A\x2A\x2A\x2A\x8B\x04\x85"
@@ -1011,10 +1008,10 @@ void R_FillAddress(void)
 //	text:01D8BF98 E8 53 B9 09 00                                      call    sub_1E278F0
 	//	.text:01D8BF9D BF B0 07 68 09                                      mov     edi, offset lineargammatable
 	//	.text:01D8BFA2 C1 E0 02                                            shl     eax, 2
-#define LIGHTGAMMATABLE_SIG_SVENGINE "\xE8\x2A\x2A\x2A\x2A\xBF\x2A\x2A\x2A\x2A\xC1"
-		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_LightLambert, 0x500, LIGHTGAMMATABLE_SIG_SVENGINE, sizeof(LIGHTGAMMATABLE_SIG_SVENGINE) - 1);
+#define LIGHTGAMMATABLE_SIG_SVENGINE "\xC1\xE0\x02\xB9\x2A\x2A\x2A\x2A\x2B\xC8"
+		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_StudioLighting, 0x500, LIGHTGAMMATABLE_SIG_SVENGINE, sizeof(LIGHTGAMMATABLE_SIG_SVENGINE) - 1);
 		Sig_AddrNotFound(lightgammatable);
-		lightgammatable = *(decltype(lightgammatable) *)(addr + 6);
+		lightgammatable = *(decltype(lightgammatable) *)(addr + 4);
 
 #define R_AMBIENTLIGHT_SIG_SVENGINE "\xF6\x44\x24\x2A\x01\xDB\x05"
 		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_StudioLighting, 0x50, R_AMBIENTLIGHT_SIG_SVENGINE, sizeof(R_AMBIENTLIGHT_SIG_SVENGINE) - 1);
@@ -1046,6 +1043,13 @@ void R_FillAddress(void)
 		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.GL_EnableMultitexture, 0x50, MTEXENABLED_SIG_SVENGINE, sizeof(MTEXENABLED_SIG_SVENGINE) - 1);
 		Sig_AddrNotFound(mtexenabled);
 		mtexenabled = *(decltype(mtexenabled) *)(addr + 2);
+
+
+#define C_BRUSH_POLYS_SIG_SVENGINE "\xFF\x35\x2A\x2A\x2A\x2A\xDC\x0D\x2A\x2A\x2A\x2A\xFF\x35\x2A\x2A\x2A\x2A\xE8"
+		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_RenderView_SvEngine, 0x800, C_BRUSH_POLYS_SIG_SVENGINE, sizeof(C_BRUSH_POLYS_SIG_SVENGINE) - 1);
+		Sig_AddrNotFound(c_brush_polys);
+		c_alias_polys = *(int **)(addr + 2);
+		c_brush_polys = *(int **)(addr + 14);
 	}
 	else
 	{
@@ -1146,7 +1150,7 @@ void R_FillAddress(void)
 #define LIGHTGAMMATABLE_SIG "\xE8\x2A\x2A\x2A\x2A\xC1\xE0\x02\xB9\x2A\x2A\x2A\x2A\x8B"
 		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_StudioLighting, 0x300, LIGHTGAMMATABLE_SIG, sizeof(LIGHTGAMMATABLE_SIG) - 1);
 		Sig_AddrNotFound(lightgammatable);
-		lightgammatable = *(int(**)[1024])(addr + 9);
+		lightgammatable = *(decltype(lightgammatable) *)(addr + 9);
 
 		//R_StudioChrome
 		//mov     eax, chromeage[esi*4]
