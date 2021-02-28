@@ -312,6 +312,7 @@ extern "C"
 	void (APIENTRY *qglTexGeniv)(GLenum coord, GLenum pname, const GLint *params) = NULL;
 	void (APIENTRY *qglTexImage1D)(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid *pixels) = NULL;
 	void (APIENTRY *qglTexImage2D)(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid *pixels) = NULL;
+	void (APIENTRY *qglTexImage3D)(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid * data) = NULL;
 	void (APIENTRY *qglTexStorage2D)(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height) = NULL;
 	void (APIENTRY *qglTexStorage3D)(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth) = NULL;
 	void (APIENTRY *qglTexStorage2DMultisample)(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height, GLboolean fixedsamplelocations) = NULL;
@@ -458,7 +459,9 @@ PFNGLUNIFORMMATRIX4FVARBPROC qglUniformMatrix4x3fvARB = NULL;
 PFNGLVERTEXATTRIB3FPROC qglVertexAttrib3f = NULL;
 PFNGLVERTEXATTRIB3FVPROC qglVertexAttrib3fv = NULL;
 PFNGLGETSHADERIVPROC qglGetShaderiv = NULL;
+PFNGLGETPROGRAMIVPROC qglGetProgramiv = NULL;
 PFNGLGETSHADERINFOLOGPROC qglGetShaderInfoLog = NULL;
+PFNGLGETPROGRAMINFOLOGPROC qglGetProgramInfoLog = NULL;
 PFNGLGETINFOLOGARBPROC qglGetInfoLogARB = NULL;
 
 void QGL_Init(void)
@@ -860,6 +863,7 @@ void QGL_InitExtension(void)
 		*(FARPROC *)&qglTexStorage2D = qwglGetProcAddress("glTexStorage2D");
 		*(FARPROC *)&qglTexStorage3D = qwglGetProcAddress("glTexStorage3D");
 		*(FARPROC *)&qglTexStorage2DMultisample = qwglGetProcAddress("glTexStorage2DMultisample");
+		*(FARPROC *)&qglTexImage3D = qwglGetProcAddress("glTexImage3D");
 	}
 
 	if (strstr(extension, "GL_ARB_multitexture"))
@@ -869,7 +873,10 @@ void QGL_InitExtension(void)
 		qglMultiTexCoord2fARB = (PFNGLMULTITEXCOORD2FARBPROC)qwglGetProcAddress("glMultiTexCoord2fARB");
 		qglMultiTexCoord3fARB = (PFNGLMULTITEXCOORD3FARBPROC)qwglGetProcAddress("glMultiTexCoord3fARB");
 
-		qglGetIntegerv(GL_MAX_TEXTURE_UNITS_ARB, &gl_mtexable);
+		TEXTURE0_SGIS = GL_TEXTURE0;
+		TEXTURE1_SGIS = GL_TEXTURE1;
+		TEXTURE2_SGIS = GL_TEXTURE2;
+		TEXTURE3_SGIS = GL_TEXTURE3;
 	}
 
 	if (strstr(extension, "GL_ARB_vertex_buffer_object"))
@@ -947,6 +954,8 @@ void QGL_InitExtension(void)
 
 		qglGetShaderiv = (PFNGLGETSHADERIVPROC)qwglGetProcAddress("glGetShaderiv");
 		qglGetShaderInfoLog = (PFNGLGETSHADERINFOLOGPROC)qwglGetProcAddress("glGetShaderInfoLog");
+		qglGetProgramiv = (PFNGLGETPROGRAMIVPROC)qwglGetProcAddress("glGetProgramiv");
+		qglGetProgramInfoLog = (PFNGLGETPROGRAMINFOLOGPROC)qwglGetProcAddress("glGetProgramInfoLog");
 		qglGetInfoLogARB = (PFNGLGETINFOLOGARBPROC)qwglGetProcAddress("glGetInfoLogARB");
 		qglGetAttribLocationARB = (PFNGLGETATTRIBLOCATIONARBPROC)qwglGetProcAddress("glGetAttribLocationARB");
 		qglVertexAttrib3f = (PFNGLVERTEXATTRIB3FPROC)qwglGetProcAddress("glVertexAttrib3f");
@@ -987,12 +996,14 @@ void QGL_InitExtension(void)
 	if (strstr(extension, "GL_EXT_framebuffer_blit"))
 	{
 		qglBlitFramebufferEXT = (PFNGLBLITFRAMEBUFFEREXTPROC)qwglGetProcAddress("glBlitFramebufferEXT");
+
+		gl_blit_support = true;
 	}
 
-	if (strstr(extension, "GL_EXT_framebuffer_multisample_blit_scaled"))
+	/*if (strstr(extension, "GL_EXT_framebuffer_multisample_blit_scaled"))
 	{
-		gl_msaa_blit_support = true;
-	}
+		
+	}*/
 
 	if(strstr(extension, "GL_NV_framebuffer_multisample_coverage"))
 	{

@@ -16,6 +16,19 @@
 #define STUDIO_NF_ADDITIVE      0x0020
 #define STUDIO_NF_MASKED        0x0040
 
+typedef struct auxvert_s
+{
+	float	fv[3];
+}auxvert_t;
+
+typedef struct alight_s
+{
+	int ambientlight;
+	int shadelight;
+	vec3_t color;
+	float *plightvec;
+}alight_t;
+
 typedef struct
 {
 	int program;
@@ -177,9 +190,19 @@ typedef struct studio_vbo_mesh_s
 {
 	studio_vbo_mesh_s()
 	{
+		iTriStripStartIndex = -1;
+		iTriStripVertexCount = 0;
+		iTriFanStartIndex = -1;
+		iTriFanVertexCount = 0;
 	}
 
 	std::vector<studio_vbo_trilist_t> vTri;
+	std::vector<unsigned int> vTriStrip;
+	std::vector<unsigned int> vTriFan;
+	int iTriStripStartIndex;
+	int iTriStripVertexCount;
+	int iTriFanStartIndex;
+	int iTriFanVertexCount;
 }studio_vbo_mesh_t;
 
 typedef struct studio_vbo_submodel_s
@@ -197,12 +220,17 @@ typedef struct studio_vbo_s
 {
 	studio_vbo_s()
 	{
-		hVBO = 0;
+		hDataBuffer = 0;
+		hIndexBuffer = 0;
+		iStartIndices = 0;
 	}
 
-	GLuint				hVBO;
+	GLuint				hDataBuffer;
+	GLuint				hIndexBuffer;
 	std::unordered_map<mstudiomodel_t *, studio_vbo_submodel_t *> vSubmodel;
 	std::vector<studio_vbo_vertex_t> vVertex;
+	std::vector<unsigned int> vIndices;
+	int					iStartIndices;
 }studio_vbo_t;
 
 //engine
@@ -227,7 +255,9 @@ extern float *r_plightvec;
 extern float *r_colormix;
 extern model_t *cl_sprite_white;
 extern model_t *cl_shellchrome;
+
 //renderer
+extern int r_studio_drawcall;
 
 void R_StudioClearVBOCache(void);
 void R_LoadStudioTextures(qboolean loadmap);
@@ -245,3 +275,10 @@ extern engine_studio_api_t IEngineStudio;
 extern r_studio_interface_t **gpStudioInterface;
 
 extern cvar_t *r_studio_vbo;
+
+#define SPRITE_VERSION 2
+
+#define NL_PRESENT 0
+#define NL_NEEDS_LOADED 1
+#define NL_UNREFERENCED 2
+#define NL_CLIENT 3

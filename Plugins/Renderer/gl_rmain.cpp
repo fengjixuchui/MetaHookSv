@@ -50,6 +50,7 @@ vec_t *vright;
 vec_t *r_origin;
 vec_t *modelorg;
 vec_t *r_entorigin;
+float *r_world_matrix;
 
 int *r_framecount;
 int *r_visframecount;
@@ -65,12 +66,11 @@ qboolean gl_framebuffer_object = false;
 qboolean gl_shader_support = false;
 qboolean gl_program_support = false;
 qboolean gl_msaa_support = false;
-qboolean gl_msaa_blit_support = false;
+qboolean gl_blit_support = false;
 qboolean gl_csaa_support = false;
 qboolean gl_float_buffer_support = false;
 qboolean gl_s3tc_compression_support = false;
 
-int gl_mtexable = 0;
 int gl_max_texture_size = 0;
 float gl_max_ansio = 0;
 float gl_force_ansio = 0;
@@ -78,7 +78,17 @@ int gl_msaa_samples = 0;
 
 int *gl_msaa_fbo = 0;
 int *gl_backbuffer_fbo = 0;
+int *gl_mtexable = 0;
 qboolean *mtexenabled = 0;
+
+float r_identity_matrix[16] = {
+	1.0f, 0.0f, 0.0f, 0.0f,
+	0.0f, 1.0f, 0.0f, 0.0f,
+	0.0f, 0.0f, 1.0f, 0.0f,
+	0.0f, 0.0f, 0.0f, 1.0f };
+
+float r_rotate_entity_matrix[16];
+bool r_rotate_entity = false;
 
 int glx = 0;
 int gly = 0;
@@ -87,7 +97,7 @@ int glheight = 0;
 
 FBO_Container_t s_MSAAFBO;
 FBO_Container_t s_GBufferFBO;
-FBO_Container_t s_BackBufferFBO;
+FBO_Container_t s_BackBufferFBO, s_BackBufferFBO2;
 FBO_Container_t s_DownSampleFBO[DOWNSAMPLE_BUFFERS];
 FBO_Container_t s_LuminFBO[LUMIN_BUFFERS];
 FBO_Container_t s_Lumin1x1FBO[LUMIN1x1_BUFFERS];
@@ -183,24 +193,6 @@ int R_GetDrawPass(void)
 	return r_draw_normal;
 }
 
-int R_GetSupportExtension(void)
-{
-	int ext = 0;
-
-	if(s_BackBufferFBO.s_hBackBufferFBO)
-		ext |= r_ext_fbo;
-	if(s_MSAAFBO.s_hBackBufferFBO)
-		ext |= r_ext_msaa;
-	if(water.program)
-		ext |= r_ext_water;
-	if(gl_shader_support)
-		ext |= r_ext_shader;
-	if(shadow.program)
-		ext |= r_ext_shadow;
-
-	return ext;
-}
-
 qboolean R_CullBox(vec3_t mins, vec3_t maxs)
 {
 	if(draw3dsky)
@@ -255,20 +247,38 @@ void R_RotateForEntity(vec_t *origin, cl_entity_t *e)
 		}
 	}
 
+	qglPushMatrix();
+	qglLoadIdentity();
 	qglTranslatef(modelpos[0], modelpos[1], modelpos[2]);
-
 	qglRotatef(angles[1], 0, 0, 1);
 	qglRotatef(angles[0], 0, 1, 0);
 	qglRotatef(angles[2], 1, 0, 0);
+	qglGetFloatv(GL_MODELVIEW_MATRIX, r_rotate_entity_matrix);
+	qglPopMatrix();
+
+	qglTranslatef(modelpos[0], modelpos[1], modelpos[2]);
+	qglRotatef(angles[1], 0, 0, 1);
+	qglRotatef(angles[0], 0, 1, 0);
+	qglRotatef(angles[2], 1, 0, 0);
+
+	r_rotate_entity = true;
 }
 
 void R_DrawSpriteModel(cl_entity_t *entity)
 {
-	R_SetGBufferRenderState(1);
+	//only non-transparent sprite goes handled by gbuffer
+	if ((*r_blend) < 1.0f)
+	{
+		R_UseGBufferProgram(GBUFFER_DIFFUSE_ENABLED | GBUFFER_TRANSPARENT_ENABLED);
+		R_SetGBufferMask(GBUFFER_MASK_DIFFUSE);
+	}
+	else
+	{
+		R_UseGBufferProgram(GBUFFER_DIFFUSE_ENABLED);
+		R_SetGBufferMask(GBUFFER_MASK_ALL);
+	}
 
 	gRefFuncs.R_DrawSpriteModel(entity);
-
-	R_SetGBufferRenderState(2);
 }
 
 void R_GetSpriteAxes(cl_entity_t *entity, int type, float *vforwrad, float *vright, float *vup)
@@ -706,6 +716,8 @@ void R_DrawTEntitiesOnList(int onlyClientDraw)
 void R_DrawBrushModel(cl_entity_t *entity)
 {
 	gRefFuncs.R_DrawBrushModel(entity);
+
+	r_rotate_entity = false;
 }
 
 void R_DrawViewModel(void)
@@ -841,21 +853,6 @@ void R_CalcRefdef(struct ref_params_s *pparams)
 	memcpy(&r_params, pparams, sizeof(struct ref_params_s));
 }
 
-void CheckMultiTextureExtensions(void)
-{
-	if (gl_mtexable)
-	{
-		TEXTURE0_SGIS = GL_TEXTURE0;
-		TEXTURE1_SGIS = GL_TEXTURE1;
-		TEXTURE2_SGIS = GL_TEXTURE2;
-		TEXTURE3_SGIS = GL_TEXTURE3;
-	}
-	else
-	{
-		Sys_ErrorEx("don't support multitexture extension!");
-	}
-}
-
 void GL_ClearFBO(FBO_Container_t *s)
 {
 	s->s_hBackBufferFBO = 0;
@@ -987,7 +984,7 @@ void R_GLFrameBufferDepthTexture(FBO_Container_t *s, GLuint iInternalFormat, qbo
 	qglBindTexture(tex2D, 0);
 }
 
-void R_GLFrameBufferDepthStencilTexture(FBO_Container_t *s, GLuint iInternalFormat, qboolean multisample)
+void R_GLFrameBufferDepthStencilTexture(FBO_Container_t *s, qboolean multisample)
 {
 	int tex2D = multisample ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D;
 
@@ -997,8 +994,7 @@ void R_GLFrameBufferDepthStencilTexture(FBO_Container_t *s, GLuint iInternalForm
 	qglTexParameteri(tex2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	qglTexParameteri(tex2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	qglTexParameteri(tex2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	qglTexImage2D(tex2D, 0, iInternalFormat, s->iWidth, s->iHeight, 0, GL_DEPTH_COMPONENT,
-		(iInternalFormat != GL_RGBA && iInternalFormat != GL_RGBA8) ? GL_FLOAT : GL_UNSIGNED_BYTE, 0);
+	qglTexImage2D(tex2D, 0, GL_DEPTH24_STENCIL8, s->iWidth, s->iHeight, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, 0);
 
 	qglFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, s->s_hBackBufferDepthTex, 0);
 	qglBindTexture(tex2D, 0);
@@ -1091,32 +1087,54 @@ void GL_GenerateFBO(void)
 	bNoStretchAspect = (gEngfuncs.CheckParm("-stretchaspect", NULL) == 0);
 
 	if (gEngfuncs.CheckParm("-nomsaa", NULL))
+	{
 		bDoMSAAFBO = false;
+		gEngfuncs.Con_Printf("MSAA disabled by user");
+	}
 
 	if (!gl_msaa_support)
+	{
 		bDoMSAAFBO = false;
+		gEngfuncs.Con_Printf("MSAA disabled due to lack of GL_EXT_framebuffer_multisample.\n");
+	}
 
-	if (!gl_msaa_blit_support)
+	if (!gl_blit_support)
+	{
 		bDoMSAAFBO = false;
+		gEngfuncs.Con_Printf("MSAA disabled due to lack of  GL_EXT_framebuffer_blit.\n");
+	}
 
 	if (gEngfuncs.CheckParm("-nofbo", NULL))
+	{
 		bDoScaledFBO = false;
+		gEngfuncs.Con_Printf("FBO rendering disabled by user.\n");
+	}
 
 	if (gEngfuncs.CheckParm("-directblit", NULL))
 		bDoDirectBlit = true;
 
 	if (gEngfuncs.CheckParm("-nodirectblit", NULL))
+	{
 		bDoDirectBlit = false;
+		gEngfuncs.Con_Printf("DirectBlit disabled by user.\n");
+	}
 
-	if(!gl_float_buffer_support)
+	if (!gl_float_buffer_support)
+	{
 		bDoHDR = false;
+		gEngfuncs.Con_Printf("HDR rendering disabled by user.\n");
+	}
 
-	if (!qglGenFramebuffersEXT || !qglBindFramebufferEXT || !qglBlitFramebufferEXT)
+	if (!gl_framebuffer_object)
+	{
 		bDoScaledFBO = false;
+		gEngfuncs.Con_Printf("FBO rendering disabled due to lack of GL_EXT_framebuffer_object.\n");
+	}
 
 	GL_ClearFBO(&s_MSAAFBO);
 	GL_ClearFBO(&s_GBufferFBO);
 	GL_ClearFBO(&s_BackBufferFBO);
+	GL_ClearFBO(&s_BackBufferFBO2);
 	for(int i = 0; i < DOWNSAMPLE_BUFFERS; ++i)
 		GL_ClearFBO(&s_DownSampleFBO[i]);
 	for(int i = 0; i < LUMIN_BUFFERS; ++i)
@@ -1192,12 +1210,9 @@ void GL_GenerateFBO(void)
 		{
 			GL_FreeFBO(&s_MSAAFBO);
 			bDoMSAAFBO = false;
-			gEngfuncs.Con_Printf("Error initializing MSAA frame buffer\n");
+
+			Sys_ErrorEx("Failed to initialize MSAA framebuffer!\n");
 		}
-	}
-	else
-	{
-		gEngfuncs.Con_Printf("MSAA backbuffer rendering disabled.\n");
 	}
 
 	if (bDoScaledFBO)
@@ -1211,21 +1226,40 @@ void GL_GenerateFBO(void)
 		if (qglCheckFramebufferStatusEXT(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
 		{
 			GL_FreeFBO(&s_BackBufferFBO);
-			gEngfuncs.Con_Printf("FBO backbuffer rendering disabled due to create error.\n");
+			bDoScaledFBO = false;
+			Sys_ErrorEx("Failed to initialize backbuffer framebuffer!\n");
 		}
-	}
-	else
-	{
-		gEngfuncs.Con_Printf("FBO backbuffer rendering enabled.\n");
+
+		s_BackBufferFBO2.iWidth = glwidth;
+		s_BackBufferFBO2.iHeight = glheight;
+		R_GLGenFrameBuffer(&s_BackBufferFBO2);
+		R_GLFrameBufferColorTexture(&s_BackBufferFBO2, iColorInternalFormat, false);
+		R_GLFrameBufferDepthTexture(&s_BackBufferFBO2, GL_DEPTH_COMPONENT24, false);
+
+		if (qglCheckFramebufferStatusEXT(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+		{
+			GL_FreeFBO(&s_BackBufferFBO2);
+			bDoScaledFBO = false;
+			Sys_ErrorEx("Failed to initialize backbuffer2 framebuffer!\n");
+		}
 	}
 
 	if (!s_BackBufferFBO.s_hBackBufferTex)
 	{
-		s_BackBufferFBO.s_hBackBufferTex = GL_GenTextureColorFormat(s_BackBufferFBO.iWidth, s_BackBufferFBO.iHeight, iColorInternalFormat);
-		s_BackBufferFBO.s_hBackBufferDepthTex = GL_GenDepthTexture(s_BackBufferFBO.iWidth, s_BackBufferFBO.iHeight);
+		s_BackBufferFBO.s_hBackBufferTex = GL_GenTextureColorFormat(glwidth, glheight, iColorInternalFormat);
+		s_BackBufferFBO.s_hBackBufferDepthTex = GL_GenDepthTexture(glwidth, glheight);
 		s_BackBufferFBO.iWidth = glwidth;
 		s_BackBufferFBO.iHeight = glheight;
 		s_BackBufferFBO.iTextureColorFormat = iColorInternalFormat;
+	}
+
+	if (!s_BackBufferFBO2.s_hBackBufferTex)
+	{
+		s_BackBufferFBO2.s_hBackBufferTex = GL_GenTextureColorFormat(glwidth, glheight, iColorInternalFormat);
+		s_BackBufferFBO2.s_hBackBufferDepthTex = GL_GenDepthTexture(glwidth, glheight);
+		s_BackBufferFBO2.iWidth = glwidth;
+		s_BackBufferFBO2.iHeight = glheight;
+		s_BackBufferFBO2.iTextureColorFormat = iColorInternalFormat;
 	}
 
 	if (bDoScaledFBO)
@@ -1532,11 +1566,13 @@ void GL_GenerateFBO(void)
 void GL_Init(void)
 {
 	QGL_Init();
-
-	CheckMultiTextureExtensions();
-
 	GL_GenerateFBO();
 	GL_InitShaders();
+
+	if (gl_mtexable && !(*gl_mtexable))
+	{
+		Sys_ErrorEx("Multitexture extension must be enabled! please remove -nomtex from launch parameters and try again.");
+	}
 }
 
 void GL_Shutdown(void)
@@ -1545,6 +1581,7 @@ void GL_Shutdown(void)
 
 	GL_FreeFBO(&s_MSAAFBO);
 	GL_FreeFBO(&s_BackBufferFBO);
+	GL_FreeFBO(&s_BackBufferFBO2);
 	for (int i = 0; i < DOWNSAMPLE_BUFFERS; ++i)
 		GL_FreeFBO(&s_DownSampleFBO[i]);
 	for (int i = 0; i < LUMIN_BUFFERS; ++i)
@@ -1576,6 +1613,9 @@ void GL_BeginRendering(int *x, int *y, int *width, int *height)
 	{
 		qglBindFramebufferEXT(GL_FRAMEBUFFER, s_BackBufferFBO.s_hBackBufferFBO);
 	}
+
+	r_wsurf_drawcall = 0;
+	r_studio_drawcall = 0;
 	
 	qglClearColor(0.0, 0.0, 0.0, 1.0);
 	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1587,11 +1627,11 @@ void R_PreRenderView()
 	{
 		(*c_alias_polys) = 0;
 		(*c_brush_polys) = 0;
-		if (water.program && r_water && r_water->value)
+		if (r_water && r_water->value && waters_active)
 		{
 			R_RenderWaterView();
 		}
-		if (shadow.program && r_shadow && r_shadow->value)
+		if (r_shadow && r_shadow->value)
 		{
 			R_RenderShadowMap();
 		}
@@ -1610,12 +1650,6 @@ void R_PreRenderView()
 
 void R_PostRenderView()
 {
-	if (!r_refdef->onlyClientDraws)
-	{
-		(*c_alias_polys) += saved_c_alias_polys;
-		(*c_brush_polys) += saved_c_brush_polys;
-	}
-
 	if (s_BackBufferFBO.s_hBackBufferFBO)
 	{
 		if (s_MSAAFBO.s_hBackBufferFBO)
@@ -1637,6 +1671,11 @@ void R_PostRenderView()
 	{
 		R_DoFXAA();
 		R_DoHDR();
+	}
+
+	if (r_speeds->value)
+	{
+		gEngfuncs.Con_Printf("%d wsurf drawcall, %d studio drawcall\n", r_wsurf_drawcall, r_studio_drawcall);
 	}
 }
 
@@ -1686,13 +1725,12 @@ void R_RenderScene(void)
 			R_DoSSAO(-1);
 		}
 	}
-}
 
-void R_DrawWorld(void)
-{
-	R_BeginRenderGBuffer();
-
-	gRefFuncs.R_DrawWorld();
+	if (!r_refdef->onlyClientDraws)
+	{
+		(*c_alias_polys) += saved_c_alias_polys;
+		(*c_brush_polys) += saved_c_brush_polys;
+	}
 }
 
 void GL_EndRendering(void)
@@ -1795,8 +1833,6 @@ void GL_EndRendering(void)
 
 void R_InitCvars(void)
 {
-	static cvar_t s_gl_texsort = { "gl_texsort", "0", 0, 0, 0 };
-
 	r_bmodelinterp = gEngfuncs.pfnGetCvarPointer("r_bmodelinterp");
 	r_bmodelhighfrac = gEngfuncs.pfnGetCvarPointer("r_bmodelhighfrac");
 	r_norefresh = gEngfuncs.pfnGetCvarPointer("r_norefresh");
@@ -1833,9 +1869,6 @@ void R_InitCvars(void)
 	gl_clear = gEngfuncs.pfnGetCvarPointer("gl_clear");
 	gl_cull = gEngfuncs.pfnGetCvarPointer("gl_cull");
 	gl_texsort = gEngfuncs.pfnGetCvarPointer("gl_texsort");
-
-	if (!gl_texsort)
-		gl_texsort = &s_gl_texsort;
 
 	gl_smoothmodels = gEngfuncs.pfnGetCvarPointer("gl_smoothmodels");
 	gl_affinemodels = gEngfuncs.pfnGetCvarPointer("gl_affinemodels");
@@ -1911,18 +1944,12 @@ void R_Init(void)
 	Draw_Init();
 }
 
-void R_VidInit(void)
-{
-	memset(&r_params, 0, sizeof(r_params));
-	R_ClearWater();
-	R_ClearShadow();
-	R_Clear3DSky();
-}
-
 void R_Shutdown(void)
 {
 	R_FreeShadow();
 	R_FreeWater();
+	R_ShutdownLight();
+	R_ShutdownWSurf();
 }
 
 void R_ForceCVars(qboolean mp)
@@ -1935,11 +1962,15 @@ void R_ForceCVars(qboolean mp)
 
 void R_NewMap(void)
 {
+	gRefFuncs.R_NewMap();
+
 	r_worldentity = gEngfuncs.GetEntityByIndex(0);
 	r_worldmodel = r_worldentity->model;
 
-	gRefFuncs.R_NewMap();
+	memset(&r_params, 0, sizeof(r_params));
 
+	R_ClearWater();
+	R_Clear3DSky();
 	R_VidInitWSurf();
 }
 

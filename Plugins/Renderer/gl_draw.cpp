@@ -540,8 +540,8 @@ texture_t *Draw_DecalTexture(int index)
 	if(index < 0)
 		return t;
 
-	if(t->anim_next && r_wsurf_decal->value)
-		return t->anim_next;
+	//if(t->anim_next && r_wsurf_decal->value)
+	//	return t->anim_next;
 
 	return t;
 }
@@ -550,8 +550,8 @@ void Draw_MiptexTexture(cachewad_t *wad, byte *data)
 {
 	gRefFuncs.Draw_MiptexTexture(wad, data);
 
-	texture_t *t = (texture_t *)data;
-	R_LinkDecalTexture(t);
+	//texture_t *t = (texture_t *)data;
+	//R_LinkDecalTexture(t);
 }
 
 DWORD ByteToUInt( byte *byte )

@@ -37,6 +37,8 @@ CViewport::CViewport(void) : Panel(NULL, "CaptionViewport")
 	SetMouseInputEnabled(false);
 	SetKeyBoardInputEnabled(false);
 	SetProportional(true);
+	m_pSubtitle = NULL;
+	m_szLevelName[0] = 0;
 }
 
 CViewport::~CViewport(void)
@@ -53,6 +55,9 @@ CViewport::~CViewport(void)
 
 CDictionary *CViewport::FindDictionary(const char *szValue)
 {
+	if (!m_Dictionary.Count())
+		return NULL;
+
 	int hash = 0;
 	hash_item_t *item;
 	int count;
@@ -82,6 +87,9 @@ CDictionary *CViewport::FindDictionary(const char *szValue)
 
 CDictionary *CViewport::FindDictionary(const char *szValue, dict_t Type)
 {
+	if (!m_Dictionary.Count())
+		return NULL;
+
 	int hash = 0;
 	hash_item_t *item;
 	int count;
@@ -111,13 +119,17 @@ CDictionary *CViewport::FindDictionary(const char *szValue, dict_t Type)
 
 CDictionary *CViewport::FindDictionaryRegex(const std::string &str, dict_t Type, std::smatch &result)
 {
+	if (!m_Dictionary.Count())
+		return NULL;
+
 	for(int i = 0; i < m_Dictionary.Count(); ++i)
 	{
-		if (m_Dictionary[i]->m_Type == Type)
+		if (m_Dictionary[i]->m_Type == Type && m_Dictionary[i]->m_bRegex)
 		{
-			std::regex pattern(m_Dictionary[i]->m_szTitle);
+			auto &title = m_Dictionary[i]->m_szTitle;
+			std::regex pattern(title);
 
-			if (std::regex_search(str, result, pattern)) 
+			if (std::regex_search(str, result, pattern))
 			{
 				return m_Dictionary[i];
 			}
@@ -351,6 +363,82 @@ CDictionary::~CDictionary()
 	}
 }
 
+//2015-11-27 added
+//Purpose: replace all "\r" "\n" to '\r' '\n'
+void ReplaceReturnW(wchar_t *str)
+{
+	wchar_t *p = str;
+
+	wchar_t *pBackSlash = NULL;
+
+	//empty sentence?
+	if (!p[0])
+		return;
+
+	//make sure we have at least two characters
+	while (*p && *(p + 1))
+	{
+		if (*p == L'\\')
+		{
+			int bMove = false;
+			if (*(p + 1) == L'r')
+			{
+				*p = L'\r';
+				bMove = true;
+			}
+			else if (*(p + 1) == L'n')
+			{
+				*p = L'\n';
+				bMove = true;
+			}
+			if (bMove)
+			{
+				int nCharsToMove = Q_wcslen(p + 2);
+				memcpy(p + 1, p + 2, (nCharsToMove + 1) * sizeof(wchar_t));
+			}
+		}
+
+		p++;
+	}
+}
+
+void ReplaceReturnA(char *str)
+{
+	char *p = str;
+
+	char *pBackSlash = NULL;
+
+	//empty sentence?
+	if (!p[0])
+		return;
+
+	//make sure we have at least two characters
+	while (*p && *(p + 1))
+	{
+		if (*p == '\\')
+		{
+			int bMove = false;
+			if (*(p + 1) == 'r')
+			{
+				*p = '\r';
+				bMove = true;
+			}
+			else if (*(p + 1) == 'n')
+			{
+				*p = '\n';
+				bMove = true;
+			}
+			if (bMove)
+			{
+				int nCharsToMove = Q_strlen(p + 2);
+				memcpy(p + 1, p + 2, (nCharsToMove + 1) * sizeof(char));
+			}
+		}
+
+		p++;
+	}
+}
+
 void CDictionary::Load(CSV::CSVDocument::row_type &row, Color &defaultColor, IScheme *ischeme)
 {
 	m_Color = defaultColor;
@@ -384,11 +472,19 @@ void CDictionary::Load(CSV::CSVDocument::row_type &row, Color &defaultColor, ISc
 	}
 
 	//2015-11-26 added to support NETMESSAGE:
-	if (!Q_strncmp(title, "NETMESSAGE:", sizeof("NETMESSAGE:") - 1))
+	if (!Q_strncmp(title, "NETMESSAGE_REGEX:", sizeof("NETMESSAGE_REGEX:") - 1))
+	{
+		m_Type = DICT_NETMESSAGE;
+		memcpy(m_szTitle, title + sizeof("NETMESSAGE_REGEX:") - 1, titlelen - (sizeof("NETMESSAGE_REGEX:") - 1));
+		m_szTitle[titlelen - (sizeof("NETMESSAGE_REGEX:") - 1)] = 0;
+		m_bRegex = true;
+	}
+	else if (!Q_strncmp(title, "NETMESSAGE:", sizeof("NETMESSAGE:") - 1))
 	{
 		m_Type = DICT_NETMESSAGE;
 		memcpy(m_szTitle, title + sizeof("NETMESSAGE:") - 1, titlelen - (sizeof("NETMESSAGE:") - 1));
 		m_szTitle[titlelen - (sizeof("NETMESSAGE:") - 1)] = 0;
+		m_bRegex = false;
 	}
 
 	//Translated text
@@ -420,18 +516,9 @@ void CDictionary::Load(CSV::CSVDocument::row_type &row, Color &defaultColor, ISc
 		m_bKeyReplaced = true;
 	}
 
-	if (m_Type == DICT_NETMESSAGE)
-	{
-		if (strstr(m_szTitle, "(") && strstr(m_szTitle, ")"))
-		{
-			if (wcschr(&m_szSentence[0], L'{') && wcschr(&m_szSentence[0], L'}'))
-			{
-				m_bRegex = true;
-			}
-		}
-	}
-
-	ReplaceReturn();
+	if(m_Type == DICT_NETMESSAGE && !m_bRegex)
+		ReplaceReturnA(m_szTitle);
+	ReplaceReturnW(m_szSentence.Base());
 
 	const char *color = row[2].c_str();
 	if(color[0])
@@ -536,10 +623,73 @@ void CDictionary::Load(CSV::CSVDocument::row_type &row, Color &defaultColor, ISc
 	}
 }
 
-void CViewport::LoadDictionary(void)
+void CViewport::LoadCustomDictionary(const char *dict_name)
 {
 	CSV::CSVDocument doc;
-	CSV::CSVDocument::row_index_type row_count;
+	CSV::CSVDocument::row_index_type row_count = 0;
+
+	//Parse from the document
+
+	try
+	{
+		row_count = doc.load_file(dict_name);
+	}
+	catch (std::exception &err)
+	{
+		gEngfuncs.Con_Printf("LoadCustomDictionary: %s", err.what());
+	}
+
+	if (row_count < 2)
+		return;
+
+	IScheme *ischeme = scheme()->GetIScheme(GetScheme());
+
+	if (!ischeme)
+		return;
+
+	Color defaultColor = ischeme->GetColor("BaseText", Color(255, 255, 255, 200));
+
+	int nRowCount = row_count;
+
+	//parse the dictionary line by line...
+	for (int i = 1; i < nRowCount; ++i)
+	{
+		CSV::CSVDocument::row_type row = doc.get_row(i);
+
+		if (row.size() < 1)
+			continue;
+
+		const char *title = row[0].c_str();
+
+		if (!title || !title[0])
+			continue;
+
+		CDictionary *Dict = new CDictionary;
+
+		Dict->Load(row, defaultColor, ischeme);
+
+		m_Dictionary.AddToTail(Dict);
+
+		AddDictionaryHash(Dict, Dict->m_szTitle);
+	}
+}
+
+void CViewport::LinkDictionary(void)
+{
+	for (int i = 0; i < m_Dictionary.Count(); ++i)
+	{
+		CDictionary *Dict = m_Dictionary[i];
+		if (Dict->m_szNext[0])
+		{
+			Dict->m_pNext = FindDictionary(Dict->m_szNext);
+		}
+	}
+}
+
+void CViewport::LoadBaseDictionary(void)
+{
+	CSV::CSVDocument doc;
+	CSV::CSVDocument::row_index_type row_count = 0;
 
 	//Parse from the document
 
@@ -549,7 +699,7 @@ void CViewport::LoadDictionary(void)
 	}
 	catch(std::exception &err)
 	{
-		Sys_ErrorEx("%s\n%s", "LoadDictionary: ", err.what());
+		Sys_ErrorEx("LoadBaseDictionary: %s", err.what());
 	}
 
 	if(row_count < 2)
@@ -593,18 +743,7 @@ void CViewport::LoadDictionary(void)
 
 		AddDictionaryHash(Dict, Dict->m_szTitle);
 	}
-
-	//Link the dictionaries
-
-	for(int i = 0; i < m_Dictionary.Count(); ++i)
-	{
-		CDictionary *Dict = m_Dictionary[i];
-		if(Dict->m_szNext[0])
-		{
-			Dict->m_pNext = FindDictionary(Dict->m_szNext);
-		}
-	}
-
+	
 }
 
 //KeyBinding Name(jump) -> Key Name(SPACE)
@@ -656,11 +795,6 @@ void CDictionary::AddPrefix(void)
 	memcpy(&m_szSentence[0] + nSpeakerLength, &m_szSentence[0], sizeof(wchar_t) * nSentenceLength);
 	memcpy(&m_szSentence[0], &m_szSpeaker[0], sizeof(wchar_t) * nSpeakerLength);
 	m_szSentence[nSentenceLength + nSpeakerLength] = L'\0';
-}
-
-void CDictionary::ReplaceRegex(void)
-{
-
 }
 
 void CDictionary::ReplaceKey(void)
@@ -767,45 +901,6 @@ void CDictionary::ReplaceKey(void)
 	}
 }
 
-//2015-11-27 added
-//Purpose: replace all "\r" "\n" to '\r' '\n'
-void CDictionary::ReplaceReturn(void)
-{
-	wchar_t *p = &m_szSentence[0];
-
-	wchar_t *pBackSlash = NULL;
-
-	//empty sentence?
-	if(!p[0])
-		return;
-
-	//make sure we have at least two characters
-	while(*p && *(p + 1))
-	{
-		if(*p == L'\\')
-		{
-			int bMove = false;
-			if(*(p + 1) == L'r')
-			{
-				*p = L'\r';
-				bMove = true;
-			}
-			else if(*(p + 1) == L'n')
-			{
-				*p = L'\n';
-				bMove = true;
-			}
-			if(bMove)
-			{
-				int nCharsToMove = Q_wcslen(p + 2);
-				memcpy(p + 1, p + 2, (nCharsToMove + 1) * sizeof(wchar_t));
-			}
-		}
-
-		p ++;
-	}
-}
-
 void CViewport::Start(void)
 {
 	m_pSubtitle = new SubtitlePanel(NULL);
@@ -822,16 +917,33 @@ void CViewport::SetParent(VPANEL vPanel)
 
 void CViewport::Think(void)
 {
+	if (!gEngfuncs.pfnGetLevelName() || !gEngfuncs.pfnGetLevelName()[0])
+		return;
+
+	if (0 != strcmp(gEngfuncs.pfnGetLevelName(), m_szLevelName))
+	{
+		std::string name = gEngfuncs.pfnGetLevelName();
+		name = name.substr(0, name.length() - 4);
+		name += "_dictionary.csv";
+
+		LoadCustomDictionary(name.c_str());
+		LinkDictionary();
+
+		strcpy(m_szLevelName, gEngfuncs.pfnGetLevelName());
+	}
 }
 
 void CViewport::VidInit(void)
 {
+	m_szLevelName[0] = 0;
+	LoadBaseDictionary();
+	LinkDictionary();
+
 	m_HudMessage.VidInit();
 }
 
 void CViewport::Init(void)
 {
-	LoadDictionary();
 	m_HudMessage.Init();
 }
 

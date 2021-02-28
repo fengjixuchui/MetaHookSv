@@ -3,6 +3,10 @@
 
 #define CACHE_FREE_SVENGINE "\x56\x57\x8B\x7C\x24\x0C\x8B\x37\x85\xF6\x2A\x2A\x68\x2A\x2A\x2A\x2A\xE8"
 
+#define R_BEGINDETAILTEXTURE_SVENGINE "\x68\x00\x22\x00\x00\x68\x00\x23\x00\x00\xFF\x15\x2A\x2A\x2A\x2A\xFF\x73\x18\xE8"
+
+#define R_ROTATEFORENTITY_SVENGINE "\x83\xEC\x2A\x8B\x2A\x24\x2A\x8B\x2A\x24\x2A\xD9\x00"
+
 #define R_CLEAR_SIG "\xD9\x05\x2A\x2A\x2A\x2A\xDC\x1D\x2A\x2A\x2A\x2A\xDF\xE0\xF6\xC4\x2A\x2A\x2A\xD9\x05\x2A\x2A\x2A\x2A\xD8\x1D\x2A\x2A\x2A\x2A\xDF\xE0"
 #define R_CLEAR_SIG2 "\x8B\x15\x2A\x2A\x2A\x2A\x33\xC0\x83\xFA\x01\x0F\x9F\xC0\x50\xE8\x2A\x2A\x2A\x2A\xD9\x05\x2A\x2A\x2A\x2A\xDC\x1D\x2A\x2A\x2A\x2A\x83\xC4\x04\xDF\xE0"
 #define R_CLEAR_SIG_NEW "\x8B\x15\x2A\x2A\x2A\x2A\x33\xC0\x83\xFA\x01\x0F\x9F\xC0\x50\xE8\x2A\x2A\x2A\x2A\xD9\x05\x2A\x2A\x2A\x2A\xDC\x1D\x2A\x2A\x2A\x2A\x83\xC4\x04"
@@ -103,6 +107,8 @@
 #define R_DRAWSEQUENTIALPOLY_SIG_NEW "\x55\x8B\xEC\x51\xA1\x2A\x2A\x2A\x2A\x53\x56\x57\x83\xB8\xF8\x02\x00\x00\x01\x75\x2A\xE8"
 #define R_DRAWSEQUENTIALPOLY_SIG_SVENGINE "\xA1\x2A\x2A\x2A\x2A\x83\xEC\x08\x83\xB8\x2A\x2A\x00\x00\x01"
 
+#define R_RENDERBRUSHPOLY_SIG_SVENGINE "\x83\xEC\x2A\xA1\x2A\x2A\x2A\x2A\x33\xC4\x2A\x44\x24\x0C\xFF\x05"
+
 #define R_DRAWBRUSHMODEL_SIG "\x83\xEC\x4C\xC7\x05\x2A\x2A\x2A\x2A\xFF\xFF\xFF\xFF\x53\x55\x56\x57"
 #define R_DRAWBRUSHMODEL_SIG_NEW "\x55\x8B\xEC\x83\xEC\x50\x53\x56\x57\x8B\x7D\x08\x89\x3D\x2A\x2A\x2A\x2A\xC7\x05\x2A\x2A\x2A\x2A\xFF\xFF\xFF\xFF"
 #define R_DRAWBRUSHMODEL_SIG_SVENGINE "\x83\xEC\x54\xA1\x2A\x2A\x2A\x2A\x33\xC4\x89\x44\x24\x50\x53\x8B\x5C\x24\x5C\x55\x56\x57\x89\x1D\x2A\x2A\x2A\x2A\x8D\xBB"
@@ -118,6 +124,8 @@
 #define R_RENDERDYNAMICLIGHTMAPS_SIG "\x8B\x0D\x2A\x2A\x2A\x2A\x53\x41\x55\x89\x0D\x2A\x2A\x2A\x2A\x8B\x4C\x24\x0C\x56\x57"
 #define R_RENDERDYNAMICLIGHTMAPS_SIG_NEW "\x55\x8B\xEC\x8B\x0D\x2A\x2A\x2A\x2A\x53\x41\x56\x89\x0D\x2A\x2A\x2A\x2A\x8B\x4D\x08\x57"
 #define R_RENDERDYNAMICLIGHTMAPS_SIG_SVENGINE "\x51\x8B\x54\x24\x08\xFF\x05\x2A\x2A\x2A\x2A\x57\x33\xFF\xF6\x42\x08\x14"
+
+#define R_BLENDLIGHTMAPS_SIG_SVENGINE "\x83\xEC\x2A\xA1\x2A\x2A\x2A\x2A\x33\xC4\x89\x44\x24\x24\x83\x3D\x2A\x2A\x2A\x2A\x00\x2A\x2A\x2A\x2A\x00\x00\xD9\x05"
 
 #define R_BUILDLIGHTMAP_SIG "\xD9\x05\x2A\x2A\x2A\x2A\xD8\x1D\x2A\x2A\x2A\x2A\x83\xEC\x18\xDF\xE0\xF6\xC4"
 #define R_BUILDLIGHTMAP_SIG_NEW "\x55\x8B\xEC\x83\xEC\x1C\xD9\x05\x2A\x2A\x2A\x2A\xD8\x1D\x2A\x2A\x2A\x2A\xDF\xE0"
@@ -248,6 +256,9 @@ void R_FillAddress(void)
 		gRefFuncs.R_DrawSequentialPoly = (void(*)(msurface_t *, int))Search_Pattern(R_DRAWSEQUENTIALPOLY_SIG_SVENGINE);
 		Sig_FuncNotFound(R_DrawSequentialPoly);
 
+		gRefFuncs.R_RenderBrushPoly = (void(*)(msurface_t *))Search_Pattern(R_RENDERBRUSHPOLY_SIG_SVENGINE);
+		Sig_FuncNotFound(R_RenderBrushPoly);
+
 		gRefFuncs.R_TextureAnimation = (texture_t *(*)(msurface_t *))Search_Pattern(R_TEXTUREANIMATION_SIG_SVENGINE);
 		Sig_FuncNotFound(R_TextureAnimation);
 
@@ -276,6 +287,9 @@ void R_FillAddress(void)
 
 		gRefFuncs.R_RenderDynamicLightmaps = (void(*)(msurface_t *))Search_Pattern(R_RENDERDYNAMICLIGHTMAPS_SIG_SVENGINE);
 		Sig_FuncNotFound(R_RenderDynamicLightmaps);
+
+		gRefFuncs.R_BlendLightmaps = (void(*)(void))Search_Pattern(R_BLENDLIGHTMAPS_SIG_SVENGINE);
+		Sig_FuncNotFound(R_BlendLightmaps);
 
 		gRefFuncs.R_DrawBrushModel = (void(*)(cl_entity_t *))Search_Pattern(R_DRAWBRUSHMODEL_SIG_SVENGINE);
 		Sig_FuncNotFound(R_DrawBrushModel);
@@ -355,6 +369,16 @@ void R_FillAddress(void)
 
 		gRefFuncs.R_DrawSpriteModel = (void(*)(cl_entity_t *))Search_Pattern(R_DRAWSRPITEMODEL_SIG_SVENGINE);
 		Sig_FuncNotFound(R_DrawSpriteModel);
+
+		addr = (DWORD)Search_Pattern_From(R_DrawSequentialPoly, R_BEGINDETAILTEXTURE_SVENGINE);
+		Sig_AddrNotFound(R_BeginDetailTexture);
+		addr += sizeof(R_BEGINDETAILTEXTURE_SVENGINE) - 1;
+		addr --;
+		gRefFuncs.R_BeginDetailTexture = (int(*)(int))GetCallAddress(addr);
+
+		gRefFuncs.R_RotateForEntity = (void(*)(float *,cl_entity_t *))Search_Pattern(R_ROTATEFORENTITY_SVENGINE);
+		Sig_FuncNotFound(R_RotateForEntity);
+
 	}
 	else if (g_dwEngineBuildnum >= 5953)
 	{
@@ -925,6 +949,16 @@ void R_FillAddress(void)
 		skychain = *(decltype(skychain) *)(addr + 10);
 		waterchain = *(decltype(waterchain) *)(addr + sizeof(SKYCHAIN_SIG_SVENGINE) - 1);
 
+#define GL_TEXSORT_SIG_SVENGINE "\x83\x3D\x2A\x2A\x2A\x2A\x00\x2A\x64\x00\x00\x00"
+		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_DrawWorld, 0x300, GL_TEXSORT_SIG_SVENGINE, sizeof(GL_TEXSORT_SIG_SVENGINE) - 1);
+		Sig_AddrNotFound(gl_texsort);
+		gl_texsort_value = *(decltype(gl_texsort_value) *)(addr + 2);
+
+#define LIGHTMAP_POLYS_SIG_SVENGINE "\x8B\x04\x85\x2A\x2A\x2A\x2A\x89\x41\x04"
+		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_RenderDynamicLightmaps, 0x100, LIGHTMAP_POLYS_SIG_SVENGINE, sizeof(LIGHTMAP_POLYS_SIG_SVENGINE) - 1);
+		Sig_AddrNotFound(lightmap_polys);
+		lightmap_polys = *(decltype(lightmap_polys) *)(addr + 3);
+
 #define LIGHTMAP_TEXTURES_SIG_SVENGINE "\xFF\x34\x85\x2A\x2A\x2A\x2A\xE8"
 		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_DrawSequentialPoly, 0x500, LIGHTMAP_TEXTURES_SIG_SVENGINE, sizeof(LIGHTMAP_TEXTURES_SIG_SVENGINE) - 1);
 		Sig_AddrNotFound(lightmap_textures);
@@ -950,6 +984,7 @@ void R_FillAddress(void)
 		Sig_AddrNotFound(gDecalSurfs);
 		gDecalSurfs = *(msurface_t ***)(addr + 3);
 		gDecalSurfCount = *(int **)(addr + 9);
+		skytexturenum = gDecalSurfCount - 1;
 
 #define GDECALPOOL_SIG_SVENGINE "\x81\xE9\x2A\x2A\x2A\x2A\xF7\xE9"
 		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_DrawDecals, 0x500, GDECALPOOL_SIG_SVENGINE, sizeof(GDECALPOOL_SIG_SVENGINE) - 1);
@@ -1044,12 +1079,32 @@ void R_FillAddress(void)
 		Sig_AddrNotFound(mtexenabled);
 		mtexenabled = *(decltype(mtexenabled) *)(addr + 2);
 
+#define MTEXABLE_SIG_SVENGINE "\x83\x3D\x2A\x2A\x2A\x2A\x00"
+		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.GL_EnableMultitexture, 0x50, MTEXABLE_SIG_SVENGINE, sizeof(MTEXABLE_SIG_SVENGINE) - 1);
+		Sig_AddrNotFound(gl_mtexable);
+		gl_mtexable = *(decltype(gl_mtexable) *)(addr + 2);
 
 #define C_BRUSH_POLYS_SIG_SVENGINE "\xFF\x35\x2A\x2A\x2A\x2A\xDC\x0D\x2A\x2A\x2A\x2A\xFF\x35\x2A\x2A\x2A\x2A\xE8"
 		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_RenderView_SvEngine, 0x800, C_BRUSH_POLYS_SIG_SVENGINE, sizeof(C_BRUSH_POLYS_SIG_SVENGINE) - 1);
 		Sig_AddrNotFound(c_brush_polys);
 		c_alias_polys = *(int **)(addr + 2);
 		c_brush_polys = *(int **)(addr + 14);
+
+#define R_DETAIL_TEXID_SIG_SVENGINE "\xFF\x15\x2A\x2A\x2A\x2A\xA1\x2A\x2A\x2A\x2A\xB2\x01"
+		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_BeginDetailTexture, 0x250, R_DETAIL_TEXID_SIG_SVENGINE, sizeof(R_DETAIL_TEXID_SIG_SVENGINE) - 1);
+		Sig_AddrNotFound(r_detail_texid);
+		r_detail_texid = *(int **)(addr + 7);
+		r_detail_texcoord = (float *)(r_detail_texid + 1);
+
+#define R_POLYGON_OFFSET_SIG_SVENGINE "\x83\xEC\x08\xD9\x15\x2A\x2A\x2A\x2A\xD9"
+		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_DrawWorld, 0x100, R_POLYGON_OFFSET_SIG_SVENGINE, sizeof(R_POLYGON_OFFSET_SIG_SVENGINE) - 1);
+		Sig_AddrNotFound(r_polygon_offset);
+		r_polygon_offset = *(float **)(addr + 5);
+
+#define R_WORLD_MATRIX_SIG_SVENGINE "\xFF\x15\x2A\x2A\x2A\x2A\x68\x2A\x2A\x2A\x2A\x68\xA6\x0B\x00\x00"
+		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_SetupGL, 0x600, R_WORLD_MATRIX_SIG_SVENGINE, sizeof(R_WORLD_MATRIX_SIG_SVENGINE) - 1);
+		Sig_AddrNotFound(r_world_matrix);
+		r_world_matrix = *(float **)(addr + 7);
 	}
 	else
 	{
@@ -1336,4 +1391,6 @@ void R_InstallHook(void)
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_AddDynamicLights, R_AddDynamicLights, (void *&)gRefFuncs.R_AddDynamicLights);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_StudioRenderFinal, R_StudioRenderFinal, (void *&)gRefFuncs.R_StudioRenderFinal);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_GLStudioDrawPoints, R_GLStudioDrawPoints, (void *&)gRefFuncs.R_GLStudioDrawPoints);
+	g_pMetaHookAPI->InlineHook(gRefFuncs.R_RotateForEntity, R_RotateForEntity, (void *&)gRefFuncs.R_RotateForEntity);
+	g_pMetaHookAPI->InlineHook(gRefFuncs.R_DrawBrushModel, R_DrawBrushModel, (void *&)gRefFuncs.R_DrawBrushModel);
 }

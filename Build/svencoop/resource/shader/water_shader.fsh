@@ -1,7 +1,5 @@
-//Water Fragment Shader by hzqst
-
 uniform vec4 waterfogcolor;
-uniform vec3 eyepos;
+uniform vec4 eyepos;
 uniform float time;
 uniform float fresnel;
 uniform float depthfactor;
@@ -10,8 +8,9 @@ uniform sampler2D normalmap;
 uniform sampler2D refractmap;
 uniform sampler2D reflectmap;
 uniform sampler2D depthrefrmap;
-varying vec3 worldpos;
+
 varying vec4 projpos;
+varying vec4 worldpos;
 
 void main()
 {
@@ -31,7 +30,7 @@ void main()
 	vec2 vBaseTexCoord = projpos.xy / projpos.w * 0.5 + 0.5;
 
 	//fresnel factor
-	vec3 vEyeVect = eyepos - worldpos;
+	vec3 vEyeVect = eyepos.xyz - worldpos.xyz;
 	float dist = length(vEyeVect);
 	float sinX = abs(vEyeVect.z) / (dist + 0.001);
 	float fresnelX = asin(sinX) / (0.5 * 3.14159);
@@ -50,7 +49,7 @@ void main()
 
 	vec4 vDepthColor = texture2D(depthrefrmap, vBaseTexCoord);
 
-#ifdef UNDER_WATER
+#ifdef UNDERWATER_ENABLED
 
 		//lerp waterfog color and refraction color
 		float flWaterColorAlpha = clamp(waterfogcolor.a, 0.01, 0.9);
@@ -61,7 +60,7 @@ void main()
 		vFinalColor2.a = 1.0;
 	    gl_FragData[0] = vFinalColor2;
 		gl_FragData[1] = vec4(1.0, 1.0, 1.0, 1.0);
-		gl_FragData[2] = vec4(worldpos, 1.0);
+		gl_FragData[2] = worldpos;
 		gl_FragData[3] = -vNormal;
 	#else
 		gl_FragColor = vFinalColor2;
@@ -98,10 +97,10 @@ void main()
 		vFinalColor2.a = flDepth;
 
 	#ifdef GBUFFER_ENABLED
-		vFinalColor2.a = 1.0f;
+		vFinalColor2.a = 1.0;
 	    gl_FragData[0] = vFinalColor2;
 		gl_FragData[1] = vec4(1.0, 1.0, 1.0, 1.0);
-		gl_FragData[2] = vec4(worldpos, 1.0);
+		gl_FragData[2] = worldpos;
 		gl_FragData[3] = vNormal;
 	#else
 		gl_FragColor = vFinalColor2;

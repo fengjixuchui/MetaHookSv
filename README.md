@@ -1,7 +1,8 @@
 # MetaHookSv
-This is a porting of MetaHook (https://github.com/nagist/metahook) for SvEngine (GoldSrc engine modified by Sven-Coop), and it is still compatible with original GoldSrc engine.
 
-Plugin porting is in progress as most signatures/patterns for GoldSrc engine are failed for SvEngine.
+This is a porting of MetaHook (https://github.com/nagist/metahook) for SvEngine (GoldSrc engine modified by Sven-Coop Team).
+
+It is currently not compatible with original GoldSrc engine, but it can be if broken signatures are fixed at future.
 
 ## Installation
 
@@ -35,9 +36,11 @@ check https://github.com/hzqst/CaptionMod for detail.
 
 3. display subtitles when there is a HUD TextMessage.
 
-4. hook original client's HUD TextMessage and draw it with multi-byte character support.
+4. hook original client's HUD TextMessage and draw it with multi-byte character support. (new and only for SvEngine)
 
-4. hook VGUI1 TextImage control paint procedure and draw it with multi-byte character support.
+4. hook VGUI1 TextImage control paint procedure and draw it with multi-byte character support. (new and only for SvEngine)
+
+5. Custom dictionary for each map, put dictionary file at "/maps/[mapname]_dictionary.csv"
 
 Current state : Ready to use.
 
@@ -61,19 +64,29 @@ Current state : Ready to use, more feature are coming soon.
 
 1. High-Dynamic-Range (HDR) post-processor.
 
-2. Water reflection and refraction. (Warning: this may cause a significant performance hit.)
+2. Simple water reflection and refraction. (Warning: this may cause a significant performance hit.)
 
-3. Per-Object Shadow. (Warning: this may cause a significant performance hit.)
+3. Simple Per-Object Shadow. (Warning: this may cause a significant performance hit.)
 
-4. Screen Space Ambient Occlusion (SSAO) using horizon-based ambient occlusion (HBAO). the implementation is taken from nvidia. (not support with -nofbo)
+4. Screen Space Ambient Occlusion (SSAO) using horizon-based ambient occlusion (HBAO). the implementation is taken from nvidia. (not support with -nofbo) (Warning: this may cause a significant performance hit when sampling radius is too large.)
 
 5. MultiSampling Anti-Aliasing (MSAA)
 
 6. Fast Approximate Anti-Aliasing (FXAA) when MSAA is not available.
 
-7. Rendering using Deferred-Shading and Per-Pixel-Lighting technique for all non-transparent objects. "unlimited" (maximum at 256 for SvEngine) dynamic lightsource supported. (not support with -nofbo)
+7. Deferred-Shading and Per-Pixel-Dynamic-Lighting for all non-transparent objects. "unlimited" (maximum at 256 for SvEngine) dynamic lightsources are supported now  with almost no cost. (not support with -nofbo)
 
-8. Vertex-Buffer-Object (VBO) rendering for terrain and studio model. with VBO you will get higher framerate and lower CPU usage. (tested with 200k epolys and get about 1.5x FPS than no-VBO mode)
+9. Vertex-Buffer-Object (VBO) "Batch-Draw" optimization and GPU-Lighting for studio model. With VBO enabled you will get higher framerate and lower CPU usage. You can get maximum at 8x FramePerSeconds than non-VBO mode in extreme case (200k+ epolys with no FPS drop).
+
+10. Vertex-Buffer-Object (VBO) "Batch-Draw" optimization for BSP terrain. With VBO enabled you will get higher framerate and lower CPU usage. Warning: this feature may cause the render result differs from the one in original game that: random textures are gone, non-visible terrain in current BSP-node are always visible...
+
+#### Todo List
+
+1. StudioModel Decal
+
+2. Ragdoll Engine
+
+3. Particle System
 
 #### Launch Parameters / Commmandline Parameters
 
@@ -167,4 +180,8 @@ r_light_specular : specular intensity of dynamic light.
 
 r_light_specularpow : specular power of dynamic light.
 
-r_studio_vbo 1 / 0 : enable / disable VBO rendering for studio model.
+r_studio_vbo 1 / 0 : enable / disable VBO batch-optmization draw for studio model.
+
+r_wsurf_vbo 1 / 0 : enable / disable VBO batch-optmization draw for BSP terrain.
+
+r_fxaa 1 / 0  : enable / disable Fast Approximate Anti-Aliasing (FXAA) when MSAA is not available.

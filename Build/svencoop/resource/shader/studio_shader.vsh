@@ -1,4 +1,4 @@
-
+#version 130
 uniform mat3x4 bonematrix[128];
 uniform float v_lambert;
 uniform float v_brightness;
@@ -29,17 +29,23 @@ void main(void)
 	int normbone = attrbone.y;
 
 	mat3x4 vertbone_matrix = bonematrix[vertbone];
+    vec3 vertbone_matrix_0 = vec3(vertbone_matrix[0][0], vertbone_matrix[0][1], vertbone_matrix[0][2]);
+  	vec3 vertbone_matrix_1 = vec3(vertbone_matrix[1][0], vertbone_matrix[1][1], vertbone_matrix[1][2]);
+    vec3 vertbone_matrix_2 = vec3(vertbone_matrix[2][0], vertbone_matrix[2][1], vertbone_matrix[2][2]);
 	vec3 outvert = vec3(
-		dot(vert, vertbone_matrix[0]) + vertbone_matrix[0][3],
-		dot(vert, vertbone_matrix[1]) + vertbone_matrix[1][3],
-		dot(vert, vertbone_matrix[2]) + vertbone_matrix[2][3]
+		dot(vert, vertbone_matrix_0) + vertbone_matrix[0][3],
+		dot(vert, vertbone_matrix_1) + vertbone_matrix[1][3],
+		dot(vert, vertbone_matrix_2) + vertbone_matrix[2][3]
 	);
 
 	mat3x4 normbone_matrix = bonematrix[normbone];
+	vec3 normbone_matrix_0 = vec3(normbone_matrix[0][0], normbone_matrix[0][1], normbone_matrix[0][2]);
+    vec3 normbone_matrix_1 = vec3(normbone_matrix[1][0], normbone_matrix[1][1], normbone_matrix[1][2]);
+    vec3 normbone_matrix_2 = vec3(normbone_matrix[2][0], normbone_matrix[2][1], normbone_matrix[2][2]);
 	vec3 outnorm = vec3(
-		dot(norm, normbone_matrix[0]),
-		dot(norm, normbone_matrix[1]),
-		dot(norm, normbone_matrix[2])
+		dot(norm, normbone_matrix_0),
+		dot(norm, normbone_matrix_1),
+		dot(norm, normbone_matrix_2)
 	);
 
 	outnorm = normalize(outnorm);
@@ -63,16 +69,15 @@ void main(void)
 
 		float lightcos = dot(outnorm, r_plightvec);
 
-		float r = v_lambert;
-		if(r < 1.0)
+		if(v_lambert < 1.0)
 		{
-			lightcos = (r - lightcos) / (r + 1.0); 
+			lightcos = (v_lambert - lightcos) / (v_lambert + 1.0); 
 			illum += r_shadelight * max(lightcos, 0.0); 			
 		}
 		else
 		{
 			illum += r_shadelight;
-			lightcos = (lightcos + r - 1.0) / r;
+			lightcos = (lightcos + v_lambert - 1.0) / v_lambert;
 			illum -= r_shadelight * max(lightcos, 0.0);
 		}
 
@@ -145,5 +150,6 @@ void main(void)
 #else
 	gl_TexCoord[0] = gl_MultiTexCoord0;
 #endif
+
 	gl_Position = gl_ModelViewProjectionMatrix * vec4(outvert, 1.0);
 }

@@ -71,11 +71,6 @@ void R_FreeShadow(void)
 	}
 }
 
-void R_ClearShadow(void)
-{
-
-}
-
 void R_InitShadow(void)
 {
 	if(gl_shader_support)
@@ -112,8 +107,6 @@ void R_InitShadow(void)
 	r_shadow_low_texsize = gEngfuncs.pfnRegisterVariable("r_shadow_low_texsize", "2048", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_shadow_low_distance = gEngfuncs.pfnRegisterVariable("r_shadow_low_distance", "4096", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_shadow_low_scale = gEngfuncs.pfnRegisterVariable("r_shadow_low_scale", "0.5", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
-
-	R_ClearShadow();
 }
 
 qboolean R_ShouldCastShadow(cl_entity_t *ent)
@@ -153,6 +146,10 @@ int R_GetTextureSizePowerOfTwo(int texSize)
 void R_RenderShadowMap(void)
 {
 	int highSize = R_GetTextureSizePowerOfTwo(r_shadow_high_texsize->value);
+
+	if (!s_ShadowFBO.s_hBackBufferFBO)
+		highSize = 512;//the fucking glCopyTexImage2D limit up to 512x512
+
 	if (!shadow_depthmap_high)
 	{
 		shadow_depthmap_high_texsize = highSize;
@@ -165,6 +162,10 @@ void R_RenderShadowMap(void)
 	}
 
 	int mediumSize = R_GetTextureSizePowerOfTwo(r_shadow_medium_texsize->value);
+
+	if (!s_ShadowFBO.s_hBackBufferFBO)
+		mediumSize = 512;//the fucking glCopyTexImage2D limit up to 512x512
+
 	if (!shadow_depthmap_medium)
 	{
 		shadow_depthmap_medium_texsize = mediumSize;
@@ -177,6 +178,10 @@ void R_RenderShadowMap(void)
 	}
 
 	int lowSize = R_GetTextureSizePowerOfTwo(r_shadow_low_texsize->value);
+
+	if (!s_ShadowFBO.s_hBackBufferFBO)
+		lowSize = 512;//the fucking glCopyTexImage2D limit up to 512x512
+
 	if (!shadow_depthmap_low)
 	{
 		shadow_depthmap_low_texsize = lowSize;
@@ -266,8 +271,6 @@ void R_RenderShadowMap(void)
 	qglEnable(GL_POLYGON_OFFSET_FILL);
 	qglDisable(GL_CULL_FACE);
 
-	drawpolynocolor = true;
-
 	for (int i = 0; i < 3; ++i)
 	{
 		qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowmapArray[i], 0);
@@ -316,8 +319,6 @@ void R_RenderShadowMap(void)
 
 		qglColorMask(1, 1, 1, 1);
 	}
-
-	drawpolynocolor = false;
 
 	qglEnable(GL_CULL_FACE);
 	qglDisable(GL_POLYGON_OFFSET_FILL);
@@ -372,24 +373,6 @@ void R_RecursiveWorldNodeShadow(mnode_t *node)
 	{
 		return;
 	}
-	/*if (node->contents < 0)
-	{
-		pleaf = (mleaf_t *)node;
-
-		mark = pleaf->firstmarksurface;
-		c = pleaf->nummarksurfaces;
-
-		if (c)
-		{
-			do
-			{
-				(*mark)->visframe = (*r_framecount);
-				mark++;
-			}
-			while (--c);
-		}
-		return;
-	}*/
 
 	plane = node->plane;
 
@@ -455,7 +438,7 @@ void R_RecursiveWorldNodeShadow(mnode_t *node)
 				if (!(surf->flags & SURF_DRAWTURB) && !(surf->flags & SURF_DRAWSKY))
 				{
 					if((*currententity)->curstate.rendermode == kRenderNormal || (*currententity)->curstate.rendermode == kRenderTransAlpha)
-						R_DrawSequentialPoly(surf, 0);
+						DrawGLPoly(surf);
 				}
 			}
 		}
@@ -538,20 +521,13 @@ void R_DrawBrushModelShadow(cl_entity_t *e)
 
 		if (((psurf->flags & SURF_PLANEBACK) && (dot < -BACKFACE_EPSILON)) || (!(psurf->flags & SURF_PLANEBACK) && (dot > BACKFACE_EPSILON)))
 		{
-			if (gl_texsort->value)
-			{
-				//R_RenderBrushPoly(psurf);
-			}
-			else
-			{
-				R_DrawSequentialPoly(psurf, 0);
-			}
+			DrawGLPoly(psurf);
 		}
 		else
 		{
 			if (psurf->flags & SURF_DRAWTURB)
 			{
-				R_DrawSequentialPoly(psurf, 1);
+				DrawGLPoly(psurf);
 			}
 		}
 	}
@@ -658,8 +634,8 @@ void R_RenderShadowScenes(void)
 
 	qglEnable(GL_BLEND);
 	qglBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	qglColor4f(0.1, 0.1, 0.1, 0.5);
-	 
+	//qglColor4f(0.1, 0.1, 0.1, 0.5);
+
 	//setup texture 0
 	GL_SelectTexture(TEXTURE0_SGIS);
 	qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
@@ -746,14 +722,45 @@ void R_RenderShadowScenes(void)
 	cl_entity_t *backup_curentity = (*currententity);
 	(*currententity) = r_worldentity;
 
-	drawpolynocolor = true;
+	if (r_wsurf_vbo->value)
+	{
+		qglEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
 
-	R_RecursiveWorldNodeShadow(r_worldmodel->nodes);
+		R_SetVBOState(VBOSTATE_LIGHTMAP_TEXTURE);
+
+		for (size_t i = 0; i < r_wsurf.vTextureChainStatic.size(); ++i)
+		{
+			auto &texchain = r_wsurf.vTextureChainStatic[i];
+
+			qglDrawElements(GL_POLYGON, texchain.iVertexCount, GL_UNSIGNED_INT, BUFFER_OFFSET(texchain.iStartIndex));
+
+			r_wsurf_drawcall++;
+
+			(*c_brush_polys) += texchain.iFaceCount;
+		}
+
+		for (size_t i = 0; i < r_wsurf.vTextureChainScroll.size(); ++i)
+		{
+			auto &texchain = r_wsurf.vTextureChainScroll[i];
+
+			qglDrawElements(GL_POLYGON, texchain.iVertexCount, GL_UNSIGNED_INT, BUFFER_OFFSET(texchain.iStartIndex));
+
+			r_wsurf_drawcall++;
+
+			(*c_brush_polys) += texchain.iFaceCount;
+		}
+
+		R_SetVBOState(VBOSTATE_OFF);
+
+		qglDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+	}
+	else
+	{
+		R_RecursiveWorldNodeShadow(r_worldmodel->nodes);
+	}
 
 	if (r_shadow->value >= 2)
 		R_DrawEntitiesOnListShadow();
-
-	drawpolynocolor = false;
 
 	(*currententity) = backup_curentity;
 

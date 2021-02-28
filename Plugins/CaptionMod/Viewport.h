@@ -47,9 +47,7 @@ public:
 	~CDictionary();
 	void Load(CSV::CSVDocument::row_type &row, Color &defaultColor, vgui::IScheme *ischeme);
 	void ReplaceKey(void);
-	void ReplaceReturn(void);
 	void AddPrefix(void);
-	void ReplaceRegex(void);
 
 	dict_t					m_Type;
 	char					m_szTitle[256];
@@ -93,7 +91,9 @@ public:
 	void SetParent(vgui::VPANEL vPanel);
 	void ActivateClientUI(void);
 	void HideClientUI(void);
-	void LoadDictionary(void);
+	void LoadBaseDictionary(void);
+	void LoadCustomDictionary(const char *dict_name);
+	void LinkDictionary(void);
 
 	//Subtitle Interface
 	void StartSubtitle(CDictionary *dict);
@@ -112,6 +112,7 @@ private:
 	SubtitlePanel *m_pSubtitle;
 	CUtlVector<CDictionary *> m_Dictionary;	
 	CUtlVector<hash_item_t> m_StringsHashTable;
+	char m_szLevelName[256];
 };
 
 extern CViewport *g_pViewPort;

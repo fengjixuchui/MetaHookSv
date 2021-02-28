@@ -1,53 +1,184 @@
 #include "gl_local.h"
 #include "cJSON.h"
+#include <sstream>
+
+//TODO: detail texture
 
 r_worldsurf_t r_wsurf;
 
 cvar_t *r_wsurf_replace;
-cvar_t *r_wsurf_sky;
-cvar_t *r_wsurf_decal;
+cvar_t *r_wsurf_vbo;
 
-void R_ClearExtraTextures(void)
-{
-	r_wsurf.ExtraTextures.pTextures = NULL;
-	r_wsurf.ExtraTextures.iNumTextures = 0;
-	r_wsurf.LocalExtraTextures.pTextures = NULL;
-	r_wsurf.LocalExtraTextures.iNumTextures = 0;
-}
+int r_wsurf_drawcall = 0;
 
-void R_ClearMapTextures(void)
-{
-	memset(r_wsurf.MapTextures, 0, sizeof(r_wsurf.MapTextures));
-}
+std::unordered_map<int, wsurf_program_t> g_WSurfProgramTable;
 
-void R_ClearDecalTextures(void)
+void R_UseWSurfProgram(int state, wsurf_program_t *progOutput)
 {
-	memset(r_wsurf.DecalTextures, 0, sizeof(r_wsurf.DecalTextures));
-	r_wsurf.iNumDecalTextures = 0;
-}
+	if (drawgbuffer)
+		return;
 
-void R_ClearSkyTextures(void)
-{
-	for(int i = 0; i < 6; ++i)
-		r_wsurf.iSkyTextures[i] = 0;
+	wsurf_program_t prog = { 0 };
+
+	auto itor = g_WSurfProgramTable.find(state);
+	if (itor == g_WSurfProgramTable.end())
+	{
+		std::stringstream defs;
+
+		if (state & WSURF_DIFFUSE_ENABLED)
+			defs << "#define DIFFUSE_ENABLED\n";
+
+		if (state & WSURF_LIGHTMAP_ENABLED)
+			defs << "#define LIGHTMAP_ENABLED\n";
+
+		if (state & WSURF_DETAILTEXTURE_ENABLED)
+			defs << "#define DETAILTEXTURE_ENABLED\n";
+
+		auto def = defs.str();
+
+		prog.program = R_CompileShaderFileEx("resource\\shader\\wsurf_shader.vsh", NULL, "resource\\shader\\wsurf_shader.fsh", def.c_str(), NULL, def.c_str());
+		if (prog.program)
+		{
+			SHADER_UNIFORM(prog, diffuseTex, "diffuseTex");
+			SHADER_UNIFORM(prog, lightmapTexArray, "lightmapTexArray");
+			SHADER_UNIFORM(prog, detailTex, "detailTex");
+			SHADER_UNIFORM(prog, speed, "speed");
+		}
+
+		g_WSurfProgramTable[state] = prog;
+	}
+	else
+	{
+		prog = itor->second;
+	}
+
+	if (prog.program)
+	{
+		qglUseProgramObjectARB(prog.program);
+
+		if (prog.diffuseTex != -1)
+			qglUniform1iARB(prog.diffuseTex, 0);
+		if (prog.lightmapTexArray != -1)
+			qglUniform1iARB(prog.lightmapTexArray, 1);
+		if (prog.detailTex != -1)
+			qglUniform1iARB(prog.detailTex, 2);
+
+		if (progOutput)
+			*progOutput = prog;
+	}
+	else
+	{
+		Sys_ErrorEx("R_UseWSurfProgram: Failed to load program!");
+	}
 }
 
 void R_FreeVertexBuffer(void)
 {
+	if (r_wsurf.hEBO)
+	{
+		qglDeleteBuffersARB(1, &r_wsurf.hEBO);
+		r_wsurf.hEBO = 0;
+	}
+
 	if (r_wsurf.hVBO)
 	{
 		qglDeleteBuffersARB(1, &r_wsurf.hVBO);
 		r_wsurf.hVBO = 0;
 	}
-	if (r_wsurf.pVertexBuffer)
+
+	if (r_wsurf.vVertexBuffer)
 	{
-		delete[] r_wsurf.pVertexBuffer;
-		r_wsurf.pVertexBuffer = NULL;
+		delete[] r_wsurf.vVertexBuffer;
+		r_wsurf.vVertexBuffer = NULL;
 	}
-	if (r_wsurf.pFaceBuffer)
+	r_wsurf.iNumVerts = 0;
+
+	if (r_wsurf.vFaceBuffer)
 	{
-		delete[] r_wsurf.pFaceBuffer;
-		r_wsurf.pFaceBuffer = NULL;
+		delete[] r_wsurf.vFaceBuffer;
+		r_wsurf.vFaceBuffer = NULL;
+	}
+	r_wsurf.iNumFaces = 0;
+
+	r_wsurf.vTextureChainStatic.clear();
+	r_wsurf.vTextureChainScroll.clear();
+
+	r_wsurf.vIndicesBuffer.clear();
+
+	r_wsurf.iNumLightmapTextures = 0;
+	GL_DeleteTexture(r_wsurf.iLightmapTextureArray);
+	r_wsurf.iLightmapTextureArray = 0;
+}
+
+void R_RecursiveWorldNodeVertexBuffer(mnode_t *node)
+{
+	if (node->contents == CONTENTS_SOLID)
+		return;
+
+	if (node->contents < 0)
+		return;
+
+	R_RecursiveWorldNodeVertexBuffer(node->children[0]);
+
+	auto c = node->numsurfaces;
+
+	if (c)
+	{
+		auto surf = r_worldmodel->surfaces + node->firstsurface;
+
+		for (; c; c--, surf++)
+		{
+			surf->texturechain = surf->texinfo->texture->texturechain;
+			surf->texinfo->texture->texturechain = surf;
+		}
+	}
+
+	R_RecursiveWorldNodeVertexBuffer(node->children[1]);
+}
+
+void R_DrawSequentialPolyVertexBuffer(msurface_t *s, brushtexchain_t *texchain)
+{
+	if (s->flags & SURF_DRAWSKY)
+		return;
+
+	auto p = s->polys;
+	auto brushface = &r_wsurf.vFaceBuffer[p->flags];
+
+	if (s->flags & SURF_DRAWTURB)
+	{
+
+	}
+	else if (s->flags & SURF_UNDERWATER)
+	{
+
+	}
+	else if (s->flags & SURF_DRAWTILED)
+	{
+		if (texchain->iScroll)
+		{
+			for (int i = 0; i < brushface->num_vertexes; ++i)
+			{
+				r_wsurf.vIndicesBuffer.emplace_back(brushface->start_vertex + i);
+				texchain->iVertexCount++;
+			}
+			r_wsurf.vIndicesBuffer.emplace_back((unsigned int)0xFFFFFFFF);
+			texchain->iVertexCount++;
+			texchain->iFaceCount++;
+		}
+	}
+	else
+	{
+		if (!texchain->iScroll)
+		{
+			for (int i = 0; i < brushface->num_vertexes; ++i)
+			{
+				r_wsurf.vIndicesBuffer.emplace_back(brushface->start_vertex + i);
+				texchain->iVertexCount++;
+			}
+			r_wsurf.vIndicesBuffer.emplace_back((unsigned int)0xFFFFFFFF);
+			texchain->iVertexCount++;
+			texchain->iFaceCount++;
+		}
 	}
 }
 
@@ -68,23 +199,21 @@ void R_GenerateVertexBuffer(void)
 
 	for(i = 0; i < r_worldmodel->numsurfaces; i++)
 	{
-		if (!(surf[i].flags & (SURF_DRAWSKY | SURF_UNDERWATER)))
-		{
-			for (poly = surf[i].polys; poly; poly = poly->next)
-				iNumVerts += 3 + (poly->numverts-3)*3;
+		if ((surf[i].flags & (SURF_DRAWSKY | SURF_UNDERWATER)))
+			continue;
 
-			iNumFaces++;
-		}
+		for (poly = surf[i].polys; poly; poly = poly->next)
+			iNumVerts += 3 + (poly->numverts-3)*3;
+
+		iNumFaces++;
 	}
 
-	//alloc vertex buffer
-	r_wsurf.pVertexBuffer = new brushvertex_t[iNumVerts];
-	memset(r_wsurf.pVertexBuffer, 0, sizeof(brushvertex_t)*iNumVerts);
+	r_wsurf.iNumLightmapTextures = 0;
+
+	r_wsurf.vVertexBuffer = new brushvertex_t[iNumVerts];
 	r_wsurf.iNumVerts = iNumVerts;
 
-	//alloc face buffer
-	r_wsurf.pFaceBuffer = new brushface_t[iNumFaces];
-	memset(r_wsurf.pFaceBuffer, 0, sizeof(brushface_t)*iNumFaces);
+	r_wsurf.vFaceBuffer = new brushface_t[iNumFaces];
 	r_wsurf.iNumFaces = iNumFaces;
 
 	for(i = 0; i < r_worldmodel->numsurfaces; i++)
@@ -95,7 +224,8 @@ void R_GenerateVertexBuffer(void)
 		poly = surf[i].polys;
 
 		poly->flags = iCurFace;
-		brushface_t *face = &r_wsurf.pFaceBuffer[iCurFace];
+
+		brushface_t *face = &r_wsurf.vFaceBuffer[iCurFace];
 		VectorCopy(surf[i].texinfo->vecs[0], face->s_tangent);
 		VectorCopy(surf[i].texinfo->vecs[1], face->t_tangent);
 		VectorNormalize(face->s_tangent);
@@ -106,17 +236,19 @@ void R_GenerateVertexBuffer(void)
 		if (surf[i].flags & SURF_PLANEBACK)
 			VectorInverse(face->normal);
 
-		// Link up with map textures
-		face->maptex = NULL;
-		for (j = 0; j < r_worldmodel->numtextures; j++)
-		{
-			if(!r_wsurf.MapTextures[j].basetex)
-				continue;
+		if (surf[i].lightmaptexturenum + 1 > r_wsurf.iNumLightmapTextures)
+			r_wsurf.iNumLightmapTextures = surf[i].lightmaptexturenum + 1;
 
-			if(r_wsurf.MapTextures[j].basetex == surf[i].texinfo->texture)
+		auto t = surf[i].texinfo ? surf[i].texinfo->texture : NULL;
+
+		float detailScale[2] = { 1 };
+		if (t)
+		{
+			if (R_BeginDetailTexture(t->gl_texturenum))
 			{
-				face->maptex = &r_wsurf.MapTextures[j];
-				break;
+				detailScale[0] = r_detail_texcoord[0];
+				detailScale[1] = r_detail_texcoord[1];
+				R_EndDetailTexture();
 			}
 		}
 
@@ -132,20 +264,24 @@ void R_GenerateVertexBuffer(void)
 				pVertexes[j].pos[2] = v[2];
 				pVertexes[j].texcoord[0] = v[3];
 				pVertexes[j].texcoord[1] = v[4];
+
+				if (t)
+					pVertexes[j].texcoord[2] = 1.0f / t->width;
+				else
+					pVertexes[j].texcoord[2] = 0;
+
 				pVertexes[j].lightmaptexcoord[0] = v[5];
 				pVertexes[j].lightmaptexcoord[1] = v[6];
+				pVertexes[j].lightmaptexcoord[2] = surf[i].lightmaptexturenum;
+				pVertexes[j].detailtexcoord[0] = v[3] * detailScale[0];
+				pVertexes[j].detailtexcoord[1] = v[4] * detailScale[1];
 				pVertexes[j].normal[0] = face->normal[0];
 				pVertexes[j].normal[1] = face->normal[1];
-				pVertexes[j].normal[2] = face->normal[2];				
-				if(face->maptex && face->maptex->detailtex)
-				{
-					pVertexes[j].detailtexcoord[0] = v[3]*face->maptex->detailscale[0];
-					pVertexes[j].detailtexcoord[1] = v[4]*face->maptex->detailscale[1];
-				}
+				pVertexes[j].normal[2] = face->normal[2];
 			}
-			memcpy(&r_wsurf.pVertexBuffer[iCurVert], &pVertexes[0], sizeof(brushvertex_t)); iCurVert++;
-			memcpy(&r_wsurf.pVertexBuffer[iCurVert], &pVertexes[1], sizeof(brushvertex_t)); iCurVert++;
-			memcpy(&r_wsurf.pVertexBuffer[iCurVert], &pVertexes[2], sizeof(brushvertex_t)); iCurVert++;
+			memcpy(&r_wsurf.vVertexBuffer[iCurVert], &pVertexes[0], sizeof(brushvertex_t)); iCurVert++;
+			memcpy(&r_wsurf.vVertexBuffer[iCurVert], &pVertexes[1], sizeof(brushvertex_t)); iCurVert++;
+			memcpy(&r_wsurf.vVertexBuffer[iCurVert], &pVertexes[2], sizeof(brushvertex_t)); iCurVert++;
 
 			for(j = 0; j < (poly->numverts-3); j++, v += VERTEXSIZE)
 			{
@@ -156,19 +292,23 @@ void R_GenerateVertexBuffer(void)
 				pVertexes[2].pos[2] = v[2];
 				pVertexes[2].texcoord[0] = v[3];
 				pVertexes[2].texcoord[1] = v[4];
+
+				if (t)
+					pVertexes[2].texcoord[2] = 1.0f / t->width;
+				else
+					pVertexes[2].texcoord[2] = 0;
+
 				pVertexes[2].lightmaptexcoord[0] = v[5];
 				pVertexes[2].lightmaptexcoord[1] = v[6];
+				pVertexes[2].lightmaptexcoord[2] = surf[i].lightmaptexturenum;
+				pVertexes[2].detailtexcoord[0] = v[3] * detailScale[0];
+				pVertexes[2].detailtexcoord[1] = v[4] * detailScale[1];
 				pVertexes[2].normal[0] = face->normal[0];
 				pVertexes[2].normal[1] = face->normal[1];
 				pVertexes[2].normal[2] = face->normal[2];
-				if(face->maptex && face->maptex->detailtex)
-				{
-					pVertexes[2].detailtexcoord[0] = v[3]*face->maptex->detailscale[0];
-					pVertexes[2].detailtexcoord[1] = v[4]*face->maptex->detailscale[1];
-				}
-				memcpy(&r_wsurf.pVertexBuffer[iCurVert], &pVertexes[0], sizeof(brushvertex_t)); iCurVert++;
-				memcpy(&r_wsurf.pVertexBuffer[iCurVert], &pVertexes[1], sizeof(brushvertex_t)); iCurVert++;
-				memcpy(&r_wsurf.pVertexBuffer[iCurVert], &pVertexes[2], sizeof(brushvertex_t)); iCurVert++;
+				memcpy(&r_wsurf.vVertexBuffer[iCurVert], &pVertexes[0], sizeof(brushvertex_t)); iCurVert++;
+				memcpy(&r_wsurf.vVertexBuffer[iCurVert], &pVertexes[1], sizeof(brushvertex_t)); iCurVert++;
+				memcpy(&r_wsurf.vVertexBuffer[iCurVert], &pVertexes[2], sizeof(brushvertex_t)); iCurVert++;
 			}
 		}
 
@@ -178,8 +318,367 @@ void R_GenerateVertexBuffer(void)
 
 	qglGenBuffersARB( 1, &r_wsurf.hVBO );
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, r_wsurf.hVBO );
-	qglBufferDataARB( GL_ARRAY_BUFFER_ARB, sizeof(brushvertex_t)*iNumVerts, r_wsurf.pVertexBuffer, GL_STATIC_DRAW_ARB );
+	qglBufferDataARB( GL_ARRAY_BUFFER_ARB, sizeof(brushvertex_t) * r_wsurf.iNumVerts, r_wsurf.vVertexBuffer, GL_STATIC_DRAW_ARB );
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+
+	R_RecursiveWorldNodeVertexBuffer(r_worldmodel->nodes);
+
+	for (i = 0; i < r_worldmodel->numtextures; i++)
+	{
+		auto t = r_worldmodel->textures[i];
+
+		if (!t)
+			continue;
+
+		auto s = t->texturechain;
+
+		if (s)
+		{
+			brushtexchain_t texchain;
+
+			texchain.pTexture = t;
+			texchain.iVertexCount = 0;
+			texchain.iFaceCount = 0;
+			texchain.iStartIndex = r_wsurf.vIndicesBuffer.size();
+			texchain.iScroll = 0;
+
+			if (i == *skytexturenum)
+			{
+				//R_DrawSkyChain(s);
+				continue;
+			}
+			else
+			{
+				if ((s->flags & SURF_DRAWTURB) && r_wateralpha->value != 1.0)
+					continue;
+
+				for (; s; s = s->texturechain)
+				{
+					R_DrawSequentialPolyVertexBuffer(s, &texchain);
+				}
+			}
+
+			if (texchain.iVertexCount > 0)
+				r_wsurf.vTextureChainStatic.emplace_back(texchain);
+		}
+		
+		s = t->texturechain;
+		if (s)
+		{
+			brushtexchain_t texchain;
+
+			texchain.pTexture = t;
+			texchain.iVertexCount = 0;
+			texchain.iFaceCount = 0;
+			texchain.iStartIndex = r_wsurf.vIndicesBuffer.size();
+			texchain.iScroll = 1;
+
+			if (i == *skytexturenum)
+			{
+				continue;
+			}
+			else
+			{
+				if ((s->flags & SURF_DRAWTURB) && r_wateralpha->value != 1.0)
+					continue;
+
+				for (; s; s = s->texturechain)
+				{
+					R_DrawSequentialPolyVertexBuffer(s, &texchain);
+				}
+			}
+
+			if (texchain.iVertexCount > 0)
+				r_wsurf.vTextureChainScroll.emplace_back(texchain);
+		}
+
+		t->texturechain = NULL;
+	}
+
+	r_wsurf.vTextureChainStatic.shrink_to_fit();
+	r_wsurf.vTextureChainScroll.shrink_to_fit();
+	r_wsurf.vIndicesBuffer.shrink_to_fit();
+
+	qglGenBuffersARB(1, &r_wsurf.hEBO);
+	qglBindBufferARB(GL_ELEMENT_ARRAY_BUFFER_ARB, r_wsurf.hEBO);
+	qglBufferDataARB(GL_ELEMENT_ARRAY_BUFFER_ARB, sizeof(unsigned int)*r_wsurf.vIndicesBuffer.size(), r_wsurf.vIndicesBuffer.data(), GL_STATIC_DRAW_ARB);
+	qglBindBufferARB(GL_ELEMENT_ARRAY_BUFFER_ARB, 0);
+
+	r_wsurf.iLightmapTextureArray = GL_GenTexture();
+	qglBindTexture(GL_TEXTURE_2D_ARRAY, r_wsurf.iLightmapTextureArray);
+	qglTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	qglTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	qglTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, BLOCK_WIDTH, BLOCK_HEIGHT, r_wsurf.iNumLightmapTextures, 0, GL_BGRA, GL_UNSIGNED_BYTE, NULL);
+	for (int i = 0; i < r_wsurf.iNumLightmapTextures; ++i)
+	{
+		qglTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, BLOCK_WIDTH, BLOCK_HEIGHT, 1, GL_RGBA, GL_UNSIGNED_BYTE, lightmaps + 0x10000 * i);
+	}
+	qglBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+
+	auto err = qglGetError();
+}
+
+void R_SetVBOState(int state)
+{
+	if(!r_wsurf_vbo->value)
+		return;
+
+	if (r_wsurf.iVBOState == state)
+		return;
+
+	switch (state)
+	{
+	case VBOSTATE_OFF:
+	{
+		if (r_wsurf.iVBOState == VBOSTATE_DETAIL_TEXTURE)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE2_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglClientActiveTextureARB(GL_TEXTURE1_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglClientActiveTextureARB(GL_TEXTURE0_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_LIGHTMAP_TEXTURE)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE1_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglClientActiveTextureARB(GL_TEXTURE0_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_DIFFUSE_TEXTURE)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE0_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+		}
+		else if (r_wsurf.iVBOState == VBOSTATE_NO_TEXTURE)
+		{
+			//do nothing
+		}
+
+		qglBindBufferARB(GL_ELEMENT_ARRAY_BUFFER_ARB, 0);
+		qglBindBufferARB(GL_ARRAY_BUFFER_ARB, 0);
+
+		qglDisableClientState(GL_NORMAL_ARRAY);
+		qglDisableClientState(GL_VERTEX_ARRAY);
+
+		break;
+	}
+	case VBOSTATE_NO_TEXTURE:
+	{
+		if (r_wsurf.iVBOState == VBOSTATE_OFF)
+		{
+			qglEnableClientState(GL_NORMAL_ARRAY);
+			qglEnableClientState(GL_VERTEX_ARRAY);
+			qglBindBufferARB(GL_ARRAY_BUFFER_ARB, r_wsurf.hVBO);
+			qglBindBufferARB(GL_ELEMENT_ARRAY_BUFFER_ARB, r_wsurf.hEBO);
+			qglNormalPointer(GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, normal));
+			qglVertexPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, pos));
+		}
+
+		if (r_wsurf.iVBOState == VBOSTATE_DETAIL_TEXTURE)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE2_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglClientActiveTextureARB(GL_TEXTURE1_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglClientActiveTextureARB(GL_TEXTURE0_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_LIGHTMAP_TEXTURE)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE1_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglClientActiveTextureARB(GL_TEXTURE0_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_DIFFUSE_TEXTURE)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE0_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_NO_TEXTURE)
+		{
+			//do nothing
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_OFF)
+		{
+			//do nothing
+		}
+
+		break;
+	}
+	case VBOSTATE_DIFFUSE_TEXTURE:
+	{
+		if (r_wsurf.iVBOState == VBOSTATE_OFF)
+		{
+			qglEnableClientState(GL_NORMAL_ARRAY);
+			qglEnableClientState(GL_VERTEX_ARRAY);
+			qglBindBufferARB(GL_ARRAY_BUFFER_ARB, r_wsurf.hVBO);
+			qglBindBufferARB(GL_ELEMENT_ARRAY_BUFFER_ARB, r_wsurf.hEBO);
+			qglNormalPointer(GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, normal));
+			qglVertexPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, pos));
+		}
+
+		if (r_wsurf.iVBOState == VBOSTATE_DETAIL_TEXTURE)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE2_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglClientActiveTextureARB(GL_TEXTURE1_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_LIGHTMAP_TEXTURE)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE1_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_DIFFUSE_TEXTURE)
+		{
+			//do nothing
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_NO_TEXTURE)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE0_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, texcoord));
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_OFF)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE0_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, texcoord));
+		}
+
+		break;
+	}
+	case VBOSTATE_LIGHTMAP_TEXTURE:
+	{
+		if (r_wsurf.iVBOState == VBOSTATE_OFF)
+		{
+			qglEnableClientState(GL_NORMAL_ARRAY);
+			qglEnableClientState(GL_VERTEX_ARRAY);
+			qglBindBufferARB(GL_ARRAY_BUFFER_ARB, r_wsurf.hVBO);
+			qglBindBufferARB(GL_ELEMENT_ARRAY_BUFFER_ARB, r_wsurf.hEBO);
+			qglNormalPointer(GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, normal));
+			qglVertexPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, pos));
+		}
+
+		if (r_wsurf.iVBOState == VBOSTATE_DETAIL_TEXTURE)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE2_ARB);
+			qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_LIGHTMAP_TEXTURE)
+		{
+			//do nothing
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_DIFFUSE_TEXTURE)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE1_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, lightmaptexcoord));
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_NO_TEXTURE)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE0_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, texcoord));
+			qglClientActiveTextureARB(GL_TEXTURE1_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, lightmaptexcoord));
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_OFF)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE0_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, texcoord));
+			qglClientActiveTextureARB(GL_TEXTURE1_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, lightmaptexcoord));
+		}
+
+		break;
+	}
+	case VBOSTATE_DETAIL_TEXTURE:
+	{
+		if (r_wsurf.iVBOState == VBOSTATE_OFF)
+		{
+			qglEnableClientState(GL_NORMAL_ARRAY);
+			qglEnableClientState(GL_VERTEX_ARRAY);
+			qglBindBufferARB(GL_ARRAY_BUFFER_ARB, r_wsurf.hVBO);
+			qglBindBufferARB(GL_ELEMENT_ARRAY_BUFFER_ARB, r_wsurf.hEBO);
+			qglNormalPointer(GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, normal));
+			qglVertexPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, pos));
+		}
+
+		if (r_wsurf.iVBOState == VBOSTATE_DETAIL_TEXTURE)
+		{
+			//do nothing
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_LIGHTMAP_TEXTURE)
+		{
+			//do nothing
+			qglClientActiveTextureARB(GL_TEXTURE2_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(2, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, detailtexcoord));
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_DIFFUSE_TEXTURE)
+		{
+			//do nothing
+			qglClientActiveTextureARB(GL_TEXTURE1_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, lightmaptexcoord));
+			qglClientActiveTextureARB(GL_TEXTURE2_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(2, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, detailtexcoord));
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_NO_TEXTURE)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE0_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, texcoord));
+			qglClientActiveTextureARB(GL_TEXTURE1_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, lightmaptexcoord));
+			qglClientActiveTextureARB(GL_TEXTURE2_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(2, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, detailtexcoord));
+		}
+
+		else if (r_wsurf.iVBOState == VBOSTATE_OFF)
+		{
+			qglClientActiveTextureARB(GL_TEXTURE0_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, texcoord));
+			qglClientActiveTextureARB(GL_TEXTURE1_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, lightmaptexcoord));
+			qglClientActiveTextureARB(GL_TEXTURE2_ARB);
+			qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			qglTexCoordPointer(2, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, detailtexcoord));
+		}
+		break;
+	}
+	}
+
+	r_wsurf.iVBOState = state;
 }
 
 char *strtolower(char *str)
@@ -192,294 +691,36 @@ char *strtolower(char *str)
 	return str;
 }
 
-void R_LoadSkyTextures(cJSON *tex)
-{
-	cJSON *replace = cJSON_GetObjectItem(tex, "replace");
-	if(replace)
-	{
-		//Load Sky Replace Textures
-		char *skytexname[6] = { "rt", "bk", "lf", "ft", "up", "dn" };
-		for(int i = 0;i < 6; ++i)
-		{
-			cJSON *obj = cJSON_GetObjectItem(replace, skytexname[i]);
-			if(obj && obj->valuestring)
-			{
-				int texid = R_LoadTextureEx(obj->valuestring, obj->valuestring, NULL, NULL, GLT_WORLD, false, true);
-				if(texid)
-				{
-					r_wsurf.iSkyTextures[i] = texid;
-				}
-			}
-		}
-	}
-}
-
-void R_LoadExtraTextureFile(qboolean loadmap)
-{
-	int i;
-	char szFileName[256];
-	char *pFile;
-
-	if(!loadmap)
-	{
-		sprintf(szFileName, "resource/extra_textures.txt");
-	}
-	else
-	{
-		strcpy( szFileName, gEngfuncs.pfnGetLevelName() );
-		if ( !strlen(szFileName) )
-		{
-			gEngfuncs.Con_Printf("R_LoadExtraTextureFile couldn't GetLevelName.\n");
-			return;
-		}
-		szFileName[strlen(szFileName)-4] = 0;
-		strcat(szFileName, "_extra.txt");
-	}
-
-	pFile = (char *)gEngfuncs.COM_LoadFile(szFileName, 5, NULL);
-	if (!pFile)
-	{
-		gEngfuncs.Con_Printf("R_LoadExtraTextureFile couldn't open %s.\n", szFileName);
-		return;
-	}
-
-	cJSON *pRoot = cJSON_Parse(pFile);
-	if (!pRoot)
-	{
-		gEngfuncs.Con_Printf("R_LoadExtraTextureFile couldn't parse %s.\n", szFileName);
-		return;
-	}
-
-	extratexture_mgr_t *pExtraMgr;
-
-	if(!loadmap)
-		pExtraMgr = &r_wsurf.ExtraTextures;
-	else
-		pExtraMgr = &r_wsurf.LocalExtraTextures;
-
-	//free
-	pExtraMgr->iNumTextures = 0;
-	if(pExtraMgr->pTextures)
-	{
-		delete [] pExtraMgr->pTextures;
-		pExtraMgr->pTextures = NULL;
-	}
-
-	int numtextures = cJSON_GetArraySize(pRoot);
-	if(numtextures)
-	{
-		pExtraMgr->iNumTextures = 0;
-		pExtraMgr->pTextures = new extratexture_t[numtextures];
-		memset(pExtraMgr->pTextures, 0, sizeof(extratexture_t) * numtextures);
-		for(i = 0; i < numtextures; ++i)
-		{
-			cJSON *tex = cJSON_GetArrayItem(pRoot, i);
-			if(tex)
-			{
-				cJSON *base = cJSON_GetObjectItem(tex, "base");
-				if(!base || !base->valuestring)
-					continue;
-
-				strtolower(base->valuestring);
-
-				if(loadmap && !strcmp(base->valuestring, "sky"))
-				{
-					R_LoadSkyTextures(tex);
-					continue;
-				}
-				int num = pExtraMgr->iNumTextures;
-				pExtraMgr->iNumTextures ++;
-				strncpy(pExtraMgr->pTextures[num].basetex, base->valuestring, 31);
-				pExtraMgr->pTextures[num].basetex[31] = 0;
-				pExtraMgr->pTextures[num].detailtex[0] = 0;
-				pExtraMgr->pTextures[num].replacetex[0] = 0;
-				pExtraMgr->pTextures[num].normaltex[0] = 0;
-				pExtraMgr->pTextures[num].detailscale[0] = 1;
-				pExtraMgr->pTextures[num].detailscale[1] = 1;
-				pExtraMgr->pTextures[num].replacescale[0] = 1;
-				pExtraMgr->pTextures[num].replacescale[1] = 1;
-				pExtraMgr->pTextures[num].loaded = false;
-				cJSON *detail = cJSON_GetObjectItem(tex, "detail");
-				if(detail && detail->valuestring)
-				{
-					strncpy(pExtraMgr->pTextures[num].detailtex, detail->valuestring, 63);
-					pExtraMgr->pTextures[num].detailtex[63] = 0;
-				}
-				cJSON *detailscale = cJSON_GetObjectItem(tex, "detailscale");
-				if(detailscale && detailscale->valuestring)
-				{
-					sscanf(detailscale->valuestring, "%f %f", &(pExtraMgr->pTextures[num].detailscale[0]), &(pExtraMgr->pTextures[num].detailscale[1]));
-				}
-
-				cJSON *replace = cJSON_GetObjectItem(tex, "replace");
-				if(replace && replace->valuestring)
-				{
-					strncpy(pExtraMgr->pTextures[num].replacetex, replace->valuestring, 63);
-					pExtraMgr->pTextures[num].replacetex[63] = 0;
-				}
-				cJSON *replacescale = cJSON_GetObjectItem(tex, "replacescale");
-				if(replacescale && replacescale->valuestring)
-				{
-					sscanf(replacescale->valuestring, "%f %f", &(pExtraMgr->pTextures[num].replacescale[0]), &(pExtraMgr->pTextures[num].replacescale[1]));
-				}
-				cJSON *normal = cJSON_GetObjectItem(tex, "normal");
-				if(normal && normal->valuestring)
-				{
-					strncpy(pExtraMgr->pTextures[num].normaltex, normal->valuestring, 63);
-					pExtraMgr->pTextures[num].normaltex[63] = 0;
-				}
-			}
-		}
-	}
-
-	cJSON_Delete(pRoot);
-	gEngfuncs.COM_FreeFile( pFile );
-}
-
-void R_LoadExtraTextures(qboolean loadmap)
-{
-	int i, j;
-	texture_t *t;
-	extratexture_t *pExTex;
-	extratexture_mgr_t *pExTexMgr;
-	maptexture_t *pMapTex;
-
-	if(!r_worldmodel->numtextures)
-		return;
-
-	if(loadmap)
-		pExTexMgr = &r_wsurf.LocalExtraTextures;
-	else
-		pExTexMgr = &r_wsurf.ExtraTextures;
-
-	//no texture need to load
-	if(!pExTexMgr->iNumTextures)
-		return;
-
-	for (i = 0; i < r_worldmodel->numtextures; i++)
-	{
-		t = r_worldmodel->textures[i];
-		if (!t)
-			continue;
-
-		pMapTex = &r_wsurf.MapTextures[i];
-
-		if(pMapTex->loaded)
-			continue;
-
-		for(j = 0; j < pExTexMgr->iNumTextures; ++j)
-		{
-			pExTex = &pExTexMgr->pTextures[j];
-			//if(pExTex->loaded)
-			//	continue;
-			if(stricmp(t->name, pExTex->basetex))
-				continue;
-
-			//pExTex->loaded = true;
-
-			pMapTex->basetex = t;
-			pMapTex->detailtex = 0;
-			pMapTex->replacetex = 0;
-			pMapTex->normaltex = 0;
-			pMapTex->detailscale[0] = 1;
-			pMapTex->detailscale[1] = 1;
-			pMapTex->replacescale[0] = 1;
-			pMapTex->replacescale[1] = 1;
-			pMapTex->loaded = true;
-
-			if(pExTex->detailtex[0])
-			{
-				pMapTex->detailtex = R_LoadTextureEx(pExTex->detailtex, pExTex->detailtex, NULL, NULL, GLT_WORLD, true, true);
-				pMapTex->detailscale[0] = (fabs(pExTex->detailscale[0]) < COLINEAR_EPSILON) ? 1 : 1 / pExTex->detailscale[0];
-				pMapTex->detailscale[1] = (fabs(pExTex->detailscale[1]) < COLINEAR_EPSILON) ? 1 : 1 / pExTex->detailscale[1];
-			}
-			if(pExTex->replacetex[0])
-			{
-				pMapTex->replacetex = R_LoadTextureEx(pExTex->replacetex, pExTex->replacetex, NULL, NULL, GLT_WORLD, true, true);
-				pMapTex->replacescale[0] = (fabs(pExTex->replacescale[0]) < COLINEAR_EPSILON) ? 1 : 1 / pExTex->replacescale[0];
-				pMapTex->replacescale[1] = (fabs(pExTex->replacescale[1]) < COLINEAR_EPSILON) ? 1 : 1 / pExTex->replacescale[1];
-			}
-			if(pExTex->normaltex[0])
-			{
-				pMapTex->normaltex = R_LoadTextureEx(pExTex->normaltex, pExTex->normaltex, NULL, NULL, GLT_WORLD, true, true);
-			}				
-		}
-	}
-}
-
-void R_LinkDecalTexture(texture_t *t)
-{
-	int i, n;
-	texture_t *t2;
-	gltexture_t *glt;
-	extratexture_mgr_t *pExtraMgr;
-	extratexture_t *pExtraTex;
-
-	for(n = 0; n < 2; ++n)
-	{
-		if(n == 0)
-			pExtraMgr = &r_wsurf.LocalExtraTextures;
-		else
-			pExtraMgr = &r_wsurf.ExtraTextures;
-		for(i = 0; i < pExtraMgr->iNumTextures; ++i)
-		{
-			pExtraTex = &pExtraMgr->pTextures[i];
-			if(pExtraTex->loaded)
-				continue;
-			if(!stricmp(t->name, pExtraTex->basetex) && pExtraTex->replacetex[0])
-			{
-				t2 = &r_wsurf.DecalTextures[r_wsurf.iNumDecalTextures];
-				r_wsurf.iNumDecalTextures ++;
-				
-				t2->gl_texturenum = R_LoadTextureEx(pExtraTex->replacetex, pExtraTex->replacetex, NULL, NULL, GLT_DECAL, false, true);
-				if(t2->gl_texturenum)
-				{
-					glt = R_GetCurrentGLTexture();
-					if(pExtraTex->replacescale[0] != 1)
-						t2->width = glt->width * pExtraTex->replacescale[0];
-					else
-						t2->width = glt->width;
-					if(pExtraTex->replacescale[1] != 1)
-						t2->height = glt->height * pExtraTex->replacescale[1];
-					else
-						t2->height = glt->height;
-
-					strcpy(t2->name, t->name);
-					t->anim_next = t2;
-					t2->anim_next = t;
-					t2->alternate_anims = (texture_t *)glt;
-					pExtraTex->loaded = true;
-				}
-				return;
-			}
-		}
-	}
-}
-
 void R_InitWSurf(void)
 {
 	r_wsurf.hVBO = 0;
-	r_wsurf.pVertexBuffer = NULL;
-	r_wsurf.pFaceBuffer = NULL;
+	r_wsurf.hEBO = 0;
+	r_wsurf.iVBOState = 0;
+	r_wsurf.bLightmapTexture = false;
+	r_wsurf.bDetailTexture = false;
 	r_wsurf.iNumBSPEntities = 0;
+	r_wsurf.iNumLightmapTextures = 0;
+	r_wsurf.iLightmapTextureArray = 0;
+	r_wsurf.vVertexBuffer = 0;
+	r_wsurf.iNumVerts = 0;
+	r_wsurf.vFaceBuffer = 0;
+	r_wsurf.iNumFaces = 0;
 
-	R_ClearExtraTextures();
-	R_ClearMapTextures();
-	R_ClearSkyTextures();
-	R_ClearDecalTextures();
 	R_ClearBSPEntities();
 
-	r_wsurf_replace = gEngfuncs.pfnRegisterVariable("r_wsurf_replace", "1", FCVAR_CLIENTDLL | FCVAR_ARCHIVE);
-	r_wsurf_sky = gEngfuncs.pfnRegisterVariable("r_wsurf_sky", "1", FCVAR_CLIENTDLL | FCVAR_ARCHIVE);
-	r_wsurf_decal = gEngfuncs.pfnRegisterVariable("r_wsurf_decal", "1", FCVAR_CLIENTDLL | FCVAR_ARCHIVE);
+	r_wsurf_vbo = gEngfuncs.pfnRegisterVariable("r_wsurf_vbo", "1", FCVAR_CLIENTDLL | FCVAR_ARCHIVE);
+}
+
+
+void R_ShutdownWSurf(void)
+{
+	g_WSurfProgramTable.clear();
 }
 
 void R_VidInitWSurf(void)
 {
 	//we don't need to free extra or decal textures cuz they are freed by engine when level changes.
 
-	R_ClearMapTextures();
-	R_ClearSkyTextures();
 	R_ClearBSPEntities();
 
 	//Load local extra textures into array
@@ -519,817 +760,360 @@ float ScrollOffset(msurface_t *psurface, cl_entity_t *pEntity)
 	return sOffset;
 }
 
-inline void R_BeginVertexArrayNoTexture(void)
-{
-	qglNormalPointer(GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, normal));
-	qglVertexPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, pos));
-}
-
-inline void R_BeginVertexArrayTexture(qboolean detail)
-{
-	qglNormalPointer(GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, normal));
-	qglVertexPointer(3, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, pos));
-
-	qglClientActiveTextureARB(GL_TEXTURE0_ARB);
-	qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
-	qglTexCoordPointer(2, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, texcoord));
-
-	qglClientActiveTextureARB(GL_TEXTURE1_ARB);
-	qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
-	qglTexCoordPointer(2, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, lightmaptexcoord));
-
-	if(detail)
-	{
-		qglClientActiveTextureARB(GL_TEXTURE2_ARB);
-		qglEnableClientState(GL_TEXTURE_COORD_ARRAY);
-		qglTexCoordPointer(2, GL_FLOAT, sizeof(brushvertex_t), OFFSET(brushvertex_t, detailtexcoord));
-	}
-}
-
-inline void R_DrawVertexArray(brushface_t *pFace)
-{
-	qglDrawArrays(GL_POLYGON, pFace->start_vertex, pFace->num_vertexes);
-}
-
-void R_DrawPolyWireFrame(brushface_t *pFace, void(*pfnDrawFunc)(brushface_t *face))
+void R_DrawWireFrame(brushface_t *brushface, void(*draw)(brushface_t *face))
 {
 	if (gl_wireframe->value)
 	{
-		GL_DisableMultitexture();
-		qglDisable(GL_TEXTURE_2D);
+		R_SetVBOState(VBOSTATE_NO_TEXTURE);
+
+		R_UseGBufferProgram(GBUFFER_TRANSPARENT_ENABLED);
+		R_SetGBufferMask(GBUFFER_MASK_DIFFUSE);
+
 		qglColor3f(1, 1, 1);
 		qglPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 		qglLineWidth(1);
 		if (gl_wireframe->value == 2)
 			qglDisable(GL_DEPTH_TEST);
 
-		pfnDrawFunc(pFace);
+		if ((*mtexenabled))
+		{
+			GL_DisableMultitexture();
+			qglDisable(GL_TEXTURE_2D);
+
+			draw(brushface);
+
+			qglEnable(GL_TEXTURE_2D);
+			GL_EnableMultitexture();
+		}
+		else
+		{
+			qglDisable(GL_TEXTURE_2D);
+
+			draw(brushface);
+
+			qglEnable(GL_TEXTURE_2D);
+		}
 
 		qglPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
-		qglEnable(GL_TEXTURE_2D);
 		if (gl_wireframe->value == 2)
-			qglEnable(GL_DEPTH_TEST);					
+			qglEnable(GL_DEPTH_TEST);
+
+		R_SetVBOState(VBOSTATE_OFF);
 	}
 }
 
-inline void R_EndVertexArrayTexture(qboolean detail)
+qboolean R_BeginDetailTexture(int texId)
 {
-	if(detail)
-	{
-		qglClientActiveTextureARB(GL_TEXTURE2_ARB);
-		qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
-	}
-	qglClientActiveTextureARB(GL_TEXTURE1_ARB);
-	qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
-	qglClientActiveTextureARB(GL_TEXTURE0_ARB);
-	qglDisableClientState(GL_TEXTURE_COORD_ARRAY);
-}
+	(*r_detail_texid) = -1;
+	r_detail_texcoord[0] = -1;
+	r_detail_texcoord[1] = -1;
 
-inline bool R_BeginDetailTexture(brushface_t *pFace)
-{
-	if (pFace->maptex && pFace->maptex->detailtex && r_detailtextures->value > 0)
+	if (gRefFuncs.R_BeginDetailTexture(texId))
 	{
-		qglActiveTextureARB(TEXTURE2_SGIS);
-		qglEnable(GL_TEXTURE_2D);
-		qglBindTexture(GL_TEXTURE_2D, pFace->maptex->detailtex);
+		qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+		qglTexEnvf(GL_TEXTURE_ENV, GL_COMBINE_RGB_EXT, GL_MODULATE);
+		qglTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE_EXT, 2.0);
 		qglMatrixMode(GL_TEXTURE);
 		qglLoadIdentity();
-		qglScalef(pFace->maptex->detailscale[0], pFace->maptex->detailscale[1], 1.0f);
 		qglMatrixMode(GL_MODELVIEW);
-
 		return true;
 	}
 
 	return false;
 }
 
-inline void R_EndDetailTexture(void)
+void R_EndDetailTexture(void)
 {
+	if (!r_wsurf.bDetailTexture)
+		return;
+
+	r_wsurf.bDetailTexture = false;
+
 	qglActiveTextureARB(TEXTURE2_SGIS);
+	qglMatrixMode(GL_TEXTURE);
+	qglLoadIdentity();
+	qglMatrixMode(GL_MODELVIEW);
 	qglDisable(GL_TEXTURE_2D);
-	qglActiveTextureARB(TEXTURE1_SGIS);
+
+	if((*mtexenabled))
+		qglActiveTextureARB(TEXTURE1_SGIS);
+	else
+		qglActiveTextureARB(TEXTURE0_SGIS);
 }
 
-void R_DrawScrollingPoly(brushface_t *pFace, float sOffset, qboolean detail)
+void DrawGLScrollingVertex(brushface_t *brushface, float sOffset)
 {
-	brushvertex_t *pVert = &r_wsurf.pVertexBuffer[pFace->start_vertex];
+	brushvertex_t *vert = &r_wsurf.vVertexBuffer[brushface->start_vertex];
 
 	qglBegin( GL_POLYGON );
-	for(int i = 0; i < pFace->num_vertexes; i++, pVert++)
+	for(int i = 0; i < brushface->num_vertexes; i++, vert++)
 	{
-		qglMultiTexCoord2fARB(TEXTURE0_SGIS, pVert->texcoord[0] + sOffset, pVert->texcoord[1]);
-		qglMultiTexCoord2fARB(TEXTURE1_SGIS, pVert->lightmaptexcoord[0], pVert->lightmaptexcoord[1]);
-		if(detail)
-			qglMultiTexCoord2fARB(TEXTURE2_SGIS, pVert->detailtexcoord[0] + sOffset, pVert->detailtexcoord[1]);
-		qglNormal3fv(pVert->normal);
-		qglVertex3fv(pVert->pos);
-	}
-	qglEnd();
-}
+		qglMultiTexCoord2fARB(TEXTURE0_SGIS, vert->texcoord[0] + sOffset, vert->texcoord[1]);
 
-void R_DrawGLPoly(brushface_t *pFace)
-{
-	brushvertex_t *pVert = &r_wsurf.pVertexBuffer[pFace->start_vertex];
-	qglBegin( GL_POLYGON );
-	for(int i = 0; i < pFace->num_vertexes; i++, pVert++)
-	{
-		qglNormal3fv(pVert->normal);
-		qglVertex3fv(pVert->pos);
-	}
-	qglEnd();
-}
+		if(r_wsurf.bLightmapTexture)
+			qglMultiTexCoord2fARB(TEXTURE1_SGIS, vert->lightmaptexcoord[0], vert->lightmaptexcoord[1]);
 
-void DrawGLPoly(msurface_t *psurface)
-{
-	int i;
-	float *v;
-	glpoly_t *p;
+		if(r_wsurf.bDetailTexture)
+			qglMultiTexCoord2fARB(TEXTURE2_SGIS, vert->detailtexcoord[0] + sOffset, vert->detailtexcoord[1]);
 
-	p = psurface->polys;
-
-	qglBegin(GL_POLYGON);
-
-	v = p->verts[0];
-
-	for (i = 0; i < p->numverts; i++, v += VERTEXSIZE)
-	{
-		qglTexCoord2f(v[3], v[4]);
-		qglVertex3fv(v);
-	}
-
-	qglEnd();
-}
-
-void DrawGLPolyScroll(msurface_t *psurface, cl_entity_t *pEntity)
-{
-	int i;
-	float *v, sOffset;
-	glpoly_t *p;
-
-	sOffset = ScrollOffset(psurface, pEntity);
-	p = psurface->polys;
-
-	qglBegin(GL_POLYGON);
-
-	v = p->verts[0];
-
-	for (i = 0; i < p->numverts; i++, v += VERTEXSIZE)
-	{
-		qglTexCoord2f(v[3] + sOffset, v[4]);
-		qglVertex3fv(v);
-	}
-
-	qglEnd();
-}
-
-// Generate lighting coordinates at each vertex for decal vertices v[] on surface psurf
-void R_DecalVertsLight(float *v, msurface_t *psurf, int vertCount)
-{
-	int j;
-	float s, t;
-
-	for (j = 0; j < vertCount; j++, v += VERTEXSIZE)
-	{
-		s = DotProduct(v, psurf->texinfo->vecs[0]) + psurf->texinfo->vecs[0][3];
-		s -= psurf->texturemins[0];
-		s += psurf->light_s * 16;
-		s += 8;
-		s /= BLOCK_WIDTH * 16;
-
-		t = DotProduct(v, psurf->texinfo->vecs[1]) + psurf->texinfo->vecs[1][3];
-		t -= psurf->texturemins[1];
-		t += psurf->light_t * 16;
-		t += 8;
-		t /= BLOCK_HEIGHT * 16;
-
-		v[5] = s;
-		v[6] = t;
-	}
-}
-
-// Quick and dirty sutherland Hodgman clipper
-// Clip polygon to decal in texture space
-// JAY: This code is lame, change it later.  It does way too much work per frame
-// It can be made to recursively call the clipping code and only copy the vertex list once
-int Inside(float *vert, int edge)
-{
-	switch (edge) {
-	case 0:		// left
-		if (vert[3] > 0.0)
-			return 1;
-		return 0;
-	case 1:		// right
-		if (vert[3] < 1.0)
-			return 1;
-		return 0;
-
-	case 2:		// top
-		if (vert[4] > 0.0)
-			return 1;
-		return 0;
-
-	case 3:
-		if (vert[4] < 1.0)
-			return 1;
-		return 0;
-	}
-	return 0;
-}
-
-
-void Intersect(float *one, float *two, int edge, float *out)
-{
-	float t;
-
-	// t is the parameter of the line between one and two clipped to the edge
-	// or the fraction of the clipped point between one & two
-	// vert[3] is u
-	// vert[4] is v
-	// vert[0], vert[1], vert[2] is X, Y, Z
-	if (edge < 2) {
-		if (edge == 0) {	// left
-			t = ((one[3] - 0) / (one[3] - two[3]));
-			out[3] = 0;
-		}
-		else {				// right
-			t = ((one[3] - 1) / (one[3] - two[3]));
-			out[3] = 1;
-		}
-		out[4] = one[4] + (two[4] - one[4]) * t;
-	}
-	else {
-		if (edge == 2) {	// top
-			t = ((one[4] - 0) / (one[4] - two[4]));
-			out[4] = 0;
-		}
-		else {				// bottom
-			t = ((one[4] - 1) / (one[4] - two[4]));
-			out[4] = 1;
-		}
-		out[3] = one[3] + (two[3] - one[3]) * t;
-	}
-	out[0] = one[0] + (two[0] - one[0]) * t;
-	out[1] = one[1] + (two[1] - one[1]) * t;
-	out[2] = one[2] + (two[2] - one[2]) * t;
-}
-
-
-//-----------------------------------------------------------------------------
-// Purpose: 
-// Input  : *vert - 
-//			vertCount - 
-//			*out - 
-//			outSize - 
-//			edge - 
-// Output : int
-//-----------------------------------------------------------------------------
-int SHClip(float *vert, int vertCount, float *out, int edge)
-{
-	int		j, outCount;
-	float	*s, *p;
-
-	outCount = 0;
-
-	s = &vert[(vertCount - 1) * VERTEXSIZE];
-	for (j = 0; j < vertCount; j++) {
-		p = &vert[j * VERTEXSIZE];
-		if (Inside(p, edge)) {
-			if (Inside(s, edge)) {
-				// Add a vertex and advance out to next vertex
-				memcpy(out, p, sizeof(float)*VERTEXSIZE);
-				outCount++;
-				out += VERTEXSIZE;
-			}
-			else {
-				Intersect(s, p, edge, out);
-				out += VERTEXSIZE;
-				outCount++;
-				memcpy(out, p, sizeof(float)*VERTEXSIZE);
-				outCount++;
-				out += VERTEXSIZE;
-			}
-		}
-		else {
-			if (Inside(s, edge)) {
-				Intersect(p, s, edge, out);
-				out += VERTEXSIZE;
-				outCount++;
-			}
-		}
-
-		s = p;
-	}
-
-	return outCount;
-}
-
-#define MAX_DECALCLIPVERT		32
-static float vert[MAX_DECALCLIPVERT][VERTEXSIZE];
-static float outvert[MAX_DECALCLIPVERT][VERTEXSIZE];
-//-----------------------------------------------------------------------------
-// Generate clipped vertex list for decal pdecal projected onto polygon psurf
-//-----------------------------------------------------------------------------
-float *R_DecalVertsClip(
-	float *poutVerts,
-	decal_t *pdecal,
-	msurface_t *psurf,
-	texture_t *ptexture,
-	int *pvertCount)
-{
-	float *v;
-	float scalex, scaley;
-	int j, outCount;
-
-	scalex = (psurf->texinfo->texture->width * pdecal->scale) / (float)ptexture->width;
-	scaley = (psurf->texinfo->texture->height * pdecal->scale) / (float)ptexture->width;
-
-	if (poutVerts == NULL)
-		poutVerts = (float *)&vert[0];
-
-	v = psurf->polys->verts[0];
-
-	for (j = 0; j < psurf->polys->numverts; j++, v += VERTEXSIZE)
-	{
-		VectorCopy(v, vert[j]);
-		vert[j][3] = (v[3] - pdecal->dx) * scalex;
-		vert[j][4] = (v[4] - pdecal->dy) * scaley;
-
-		if (pdecal->flags & FDECAL_HFLIP)
-			vert[j][3] = 1 - vert[j][3];
-
-		if (pdecal->flags & FDECAL_VFLIP)
-			vert[j][4] = 1 - vert[j][4];
-	}
-
-	// Clip the polygon to the decal texture space
-	outCount = SHClip((float *)&vert[0], psurf->polys->numverts, (float *)&outvert[0], 0);
-	outCount = SHClip((float *)&outvert[0], outCount, (float *)&vert[0], 1);
-	outCount = SHClip((float *)&vert[0], outCount, (float *)&outvert[0], 2);
-	outCount = SHClip((float *)&outvert[0], outCount, poutVerts, 3);
-
-	if (outCount)
-	{
-		if (pdecal->flags & FDECAL_CLIPTEST)
-		{
-			pdecal->flags &= ~FDECAL_CLIPTEST;	// We're doing the test
-
-			// If there are exactly 4 verts and they are all 0,1 tex coords, then we've got an unclipped decal
-			// A more precise test would be to calculate the texture area and make sure it's one, but this
-			// should work as well.
-			if (outCount == 4)
-			{
-				int clipped = 0;
-				float s, t;
-
-				v = poutVerts;
-				for (j = 0; j < outCount && !clipped; j++, v += VERTEXSIZE)
-				{
-					s = v[3];
-					t = v[4];
-
-					if ((s != 0.0 && s != 1.0) || (t != 0.0 && t != 1.0))
-						clipped = 1;
-				}
-
-				// We didn't need to clip this decal, it's a quad covering the full texture space, optimize
-				// subsequent frames.
-				if (!clipped)
-					pdecal->flags |= FDECAL_NOCLIP;
-			}
-		}
-	}
-
-	*pvertCount = outCount;
-	return poutVerts;
-}
-
-static int R_DecalIndex(decal_t *pdecal)
-{
-	return (pdecal - gDecalPool);
-}
-
-static int R_DecalCacheIndex(int index)
-{
-	return index & (256 - 1);
-}
-
-
-static decalcache_t *R_DecalCacheSlot(int decalIndex)
-{
-	int				cacheIndex;
-
-	cacheIndex = R_DecalCacheIndex(decalIndex);	// Find the cache slot
-
-	return gDecalCache + cacheIndex;
-}
-
-static float *R_DecalVertsNoclip(decal_t *pdecal, msurface_t *psurf, texture_t *ptexture, qboolean bMultitexture)
-{
-	float			*vlist;
-	decalcache_t	*pCache;
-	int				decalIndex;
-	int				outCount;
-
-	decalIndex = R_DecalIndex(pdecal);
-	pCache = R_DecalCacheSlot(decalIndex);
-
-	// Is the decal cached?
-	if (pCache->decalIndex == decalIndex)
-	{
-		return (float *)&pCache->decalVert[0];
-	}
-
-	pCache->decalIndex = decalIndex;
-
-	vlist = pCache->decalVert[0];
-
-	// Use the old code for now, and just cache them
-	vlist = R_DecalVertsClip(vlist, pdecal, psurf, ptexture, &outCount);
-
-	R_DecalVertsLight(vlist, psurf, 4);
-
-	return vlist;
-}
-
-static void R_DecalPoly(float *v, texture_t *ptexture, msurface_t *psurf, int vertCount)
-{
-	auto p = psurf->polys;
-	auto bface = &r_wsurf.pFaceBuffer[p->flags];
-
-	R_SetRenderGBufferDecal();
-	R_SetGBufferRenderState(1);
-
-	GL_Bind(ptexture->gl_texturenum);
-	qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-	qglBegin(GL_POLYGON);
-	for (int j = 0; j < vertCount; j++, v += VERTEXSIZE)
-	{
-		qglTexCoord2f(v[3], v[4]);
-		qglVertex3fv(v);
+		qglNormal3fv(vert->normal);
+		qglVertex3fv(vert->pos);
 	}
 	qglEnd();
 
-	R_SetRenderGBufferAll();
+	(*c_brush_polys)++;
+	r_wsurf_drawcall ++;
 }
 
-static void R_DecalMPoly(float *v, texture_t *ptexture, msurface_t *psurf, int vertCount)
+void DrawGLVertex(brushface_t *brushface)
 {
-	auto p = psurf->polys;
-	auto bface = &r_wsurf.pFaceBuffer[p->flags];
-	auto pVert = &r_wsurf.pVertexBuffer[bface->start_vertex];
+	return DrawGLScrollingVertex(brushface, 0);
+}
 
-	R_SetRenderGBufferDecal();
-	R_SetGBufferRenderState(2);
+void DrawGLPoly(glpoly_t *p)
+{
+	auto brushface = &r_wsurf.vFaceBuffer[p->flags];
 
-	GL_SelectTexture(TEXTURE0_SGIS);
-	GL_Bind(ptexture->gl_texturenum);
-	qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-	GL_EnableMultitexture();
-	GL_Bind(lightmap_textures[psurf->lightmaptexturenum]);
-	qglBegin(GL_POLYGON);
-	for (int j = 0; j < vertCount; j++, v += VERTEXSIZE)
-	{
-		qglMultiTexCoord2fARB(TEXTURE0_SGIS, v[3], v[4]);
-		qglMultiTexCoord2fARB(TEXTURE1_SGIS, v[5], v[6]);
-		qglNormal3fv(pVert->normal);
-		qglVertex3fv(v);
-	}
-	qglEnd();
+	DrawGLVertex(brushface);
 
-	R_SetRenderGBufferAll();
+	R_DrawWireFrame(brushface, DrawGLVertex);
+}
+
+void DrawGLPoly(msurface_t *fa)
+{
+	auto p = fa->polys;
+	return DrawGLPoly(p);
+}
+
+void DrawGLPolyScroll(msurface_t *fa, cl_entity_t *pEntity)
+{
+	auto p = fa->polys;	
+	auto brushface = &r_wsurf.vFaceBuffer[p->flags];
+
+	auto sOffset = ScrollOffset(fa, pEntity);
+
+	DrawGLScrollingVertex(brushface, sOffset);
+
+	R_DrawWireFrame(brushface, DrawGLVertex);
+}
+
+void DrawGLPolySolid(msurface_t *fa)
+{
+	auto p = fa->polys;
+	auto brushface = &r_wsurf.vFaceBuffer[p->flags];
+
+	qglColor4f(
+		(*currententity)->curstate.rendercolor.r / 255.0,
+		(*currententity)->curstate.rendercolor.g / 255.0,
+		(*currententity)->curstate.rendercolor.b / 255.0,
+		(*r_blend));
+
+	DrawGLVertex(brushface);
+
+	R_DrawWireFrame(brushface, DrawGLVertex);
 }
 
 void R_DrawDecals(qboolean bMultitexture)
 {
-	if (bMultitexture)
-	{
-		R_SetRenderGBufferDecal();
-		R_SetGBufferRenderState(2);
-		gRefFuncs.R_DrawDecals(bMultitexture);
-		R_SetRenderGBufferAll();
-	}
-	else
-	{
-		R_SetRenderGBufferDecal();
-		R_SetGBufferRenderState(1);
-		gRefFuncs.R_DrawDecals(bMultitexture);
-		R_SetRenderGBufferAll();
-	}
-	return;
+	//Force using multitexture
+	R_UseGBufferProgram(GBUFFER_DIFFUSE_ENABLED | GBUFFER_LIGHTMAP_ENABLED);
+	R_SetGBufferMask(GBUFFER_MASK_DIFFUSE);
+	gRefFuncs.R_DrawDecals(1);
 
-	decal_t *plist;
-	int i, outCount;
-	texture_t *ptexture;
-	msurface_t *psurf;
-	float *v;
+	(*c_brush_polys)++;
 
-	if (!(*gDecalSurfCount))
-		return;
+	r_wsurf_drawcall++;
 
-	qglEnable(GL_BLEND);
-	qglEnable(GL_ALPHA_TEST);
-	qglBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	qglDepthMask(0);
-
-	if (gl_polyoffset->value)
-	{
-		qglEnable(GL_POLYGON_OFFSET_FILL);
-
-		if (gl_ztrick && gl_ztrick->value)
-			qglPolygonOffset(1, gl_polyoffset->value);
-		else
-			qglPolygonOffset(-1, -gl_polyoffset->value);
-	}
-
-	for (i = 0; i < (*gDecalSurfCount); i++)
-	{
-		psurf = gDecalSurfs[i];
-		plist = psurf->pdecals;
-
-		while (plist)
-		{
-			ptexture = Draw_DecalTexture(plist->texture);
-			if (plist->flags & FDECAL_NOCLIP)
-			{
-				v = R_DecalVertsNoclip(plist, psurf, ptexture, bMultitexture);
-				outCount = 4;
-			}
-			else
-			{
-				v = R_DecalVertsClip(NULL, plist, psurf, ptexture, &outCount);
-				if (outCount && bMultitexture)
-				{
-					R_DecalVertsLight(v, psurf, outCount);
-				}
-			}
-
-			if (outCount)
-			{
-				if (bMultitexture)
-					R_DecalMPoly(v, ptexture, psurf, outCount);
-				else
-					R_DecalPoly(v, ptexture, psurf, outCount);
-			}
-			plist = plist->pnext;
-		}
-	}
-
-	if (gl_polyoffset->value)
-	{
-		qglDisable(GL_POLYGON_OFFSET_FILL);
-	}
-
-	qglDisable(GL_ALPHA_TEST);
-	qglDisable(GL_BLEND);
-	qglDepthMask(1);
-
-	(*gDecalSurfCount) = 0;
+	//Restore if not enabled
+	if (!bMultitexture)
+		GL_DisableMultitexture();
 }
 
 void R_DrawSequentialPoly(msurface_t *s, int face)
 {
 	if ((*currententity)->curstate.rendermode == kRenderTransColor)
 	{
-		//todo
-		auto p = s->polys;
-		auto bface = &r_wsurf.pFaceBuffer[p->flags];
-
-		R_SetGBufferRenderState(1);
 		GL_DisableMultitexture();
 
 		qglBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		qglEnable(GL_BLEND);
-		auto t = gRefFuncs.R_TextureAnimation(s);
-		GL_Bind(t->gl_texturenum);
+
 		qglDisable(GL_TEXTURE_2D);
 
-		//DrawGLSolidPoly
-		qglColor4f(
-			(float)(*currententity)->curstate.rendercolor.r / 255.0f,
-			(float)(*currententity)->curstate.rendercolor.g / 255.0f, 
-			(float)(*currententity)->curstate.rendercolor.b / 255.0f,
-			(*r_blend));
+		if ((*r_blend) < 1)
+		{
+			R_UseGBufferProgram(GBUFFER_TRANSPARENT_ENABLED);
+			R_SetGBufferMask(GBUFFER_MASK_DIFFUSE);
+		}
+		else
+		{
+			R_UseGBufferProgram(0);
+			R_SetGBufferMask(GBUFFER_MASK_ALL);
+		}
 
-		qglEnableClientState(GL_VERTEX_ARRAY);
-		qglEnableClientState(GL_NORMAL_ARRAY);
-		qglBindBufferARB(GL_ARRAY_BUFFER_ARB, r_wsurf.hVBO);
-		R_BeginVertexArrayNoTexture();
-		R_DrawVertexArray(bface);
-		R_DrawPolyWireFrame(bface, R_DrawVertexArray);
-		qglBindBufferARB(GL_ARRAY_BUFFER_ARB, 0);
-		qglDisableClientState(GL_NORMAL_ARRAY);
-		qglDisableClientState(GL_VERTEX_ARRAY);
+		DrawGLPolySolid(s);
 
 		qglEnable(GL_TEXTURE_2D);
+
 		GL_EnableMultitexture();
 		return;
 	}
 
-	if (s->flags & SURF_DRAWTURB)
+	if ((s->flags & (SURF_DRAWSKY | SURF_DRAWTURB | SURF_UNDERWATER)))
 	{
-		GL_DisableMultitexture();
-		GL_Bind(s->texinfo->texture->gl_texturenum);
-		EmitWaterPolys(s, face);
+		if (s->flags & SURF_DRAWTURB)
+		{
+			GL_DisableMultitexture();
+			GL_Bind(s->texinfo->texture->gl_texturenum);
+			EmitWaterPolys(s, face);
+			return;
+		}
 		return;
 	}
 
-	if (!(s->flags & (SURF_DRAWSKY | SURF_DRAWTURB | SURF_UNDERWATER)))
+	R_RenderDynamicLightmaps(s);
+
+	if (((*currententity)->curstate.rendermode == kRenderTransAlpha || (*currententity)->curstate.rendermode == kRenderNormal))
 	{
-		if (!drawpolynocolor)
+		auto p = s->polys;
+		auto brushface = &r_wsurf.vFaceBuffer[p->flags];
+		auto t = gRefFuncs.R_TextureAnimation(s);
+
+		GL_SelectTexture(TEXTURE0_SGIS);
+		GL_Bind(t->gl_texturenum);
+		qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+
+		if ((*currententity)->curstate.rendermode == kRenderTransColor)
+			qglDisable(GL_TEXTURE_2D);
+
+		auto lightmapnum = s->lightmaptexturenum;
+
+		GL_EnableMultitexture();
+		GL_Bind(lightmap_textures[lightmapnum]);
+		qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+		r_wsurf.bLightmapTexture = true;
+
+		if (lightmap_modified[lightmapnum])
 		{
-			gRefFuncs.R_RenderDynamicLightmaps(s);
-		}
-
-		if (gl_mtexable && ((*currententity)->curstate.rendermode == kRenderTransAlpha || (*currententity)->curstate.rendermode == kRenderNormal))
-		{
-			auto p = s->polys;
-			auto bface = &r_wsurf.pFaceBuffer[p->flags];
-			auto t = gRefFuncs.R_TextureAnimation(s);
-
-			if (!drawpolynocolor)
+			lightmap_modified[lightmapnum] = 0;
+			if (g_iEngineType == ENGINE_SVENGINE)
 			{
-				GL_SelectTexture(TEXTURE0_SGIS);
-				GL_Bind(t->gl_texturenum);
-				qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-
-				if ((*currententity)->curstate.rendermode == kRenderTransColor)
-					qglDisable(GL_TEXTURE_2D);
-			}
-
-			auto lightmapnum = s->lightmaptexturenum;
-
-			if (!drawpolynocolor)
-			{
-				R_SetGBufferRenderState(2);
-				GL_EnableMultitexture();				
-				GL_Bind(lightmap_textures[lightmapnum]);
-				qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-			}
-
-			if (lightmap_modified[lightmapnum])
-			{
-				lightmap_modified[lightmapnum] = 0;
-				if (g_iEngineType == ENGINE_SVENGINE)
-				{
-					glRect_SvEngine_t *theRect = (glRect_SvEngine_t *)((char *)lightmap_rectchange + sizeof(glRect_SvEngine_t) * lightmapnum);
-					qglTexSubImage2D(GL_TEXTURE_2D, 0, 0, theRect->t, BLOCK_WIDTH, theRect->h, GL_RGBA, GL_UNSIGNED_BYTE, lightmaps + (lightmapnum * BLOCK_HEIGHT + theRect->t) * BLOCK_WIDTH * LIGHTMAP_BYTES);
-					theRect->l = BLOCK_WIDTH;
-					theRect->t = BLOCK_HEIGHT;
-					theRect->h = 0;
-					theRect->w = 0;
-				}
-				else
-				{
-					glRect_t *theRect = (glRect_t *)((char *)lightmap_rectchange + sizeof(glRect_t) * lightmapnum);
-					qglTexSubImage2D(GL_TEXTURE_2D, 0, 0, theRect->t, BLOCK_WIDTH, theRect->h, GL_RGBA, GL_UNSIGNED_BYTE, lightmaps + (lightmapnum * BLOCK_HEIGHT + theRect->t) * BLOCK_WIDTH * LIGHTMAP_BYTES);
-					theRect->l = BLOCK_WIDTH;
-					theRect->t = BLOCK_HEIGHT;
-					theRect->h = 0;
-					theRect->w = 0;
-				}
-			}
-
-			bool detail = drawpolynocolor ? false : R_BeginDetailTexture(bface);
-
-			if (detail)
-				R_SetGBufferRenderState(3);
-
-			if (s->flags & SURF_DRAWTILED)
-			{
-				auto sOffset = ScrollOffset(s, *currententity);
-
-				R_DrawScrollingPoly(bface, sOffset, detail);
-
-				if(detail) R_EndDetailTexture();
-
-				R_DrawPolyWireFrame(bface, R_DrawGLPoly);
+				glRect_SvEngine_t *theRect = (glRect_SvEngine_t *)((char *)lightmap_rectchange + sizeof(glRect_SvEngine_t) * lightmapnum);
+				qglTexSubImage2D(GL_TEXTURE_2D, 0, 0, theRect->t, BLOCK_WIDTH, theRect->h, GL_RGBA, GL_UNSIGNED_BYTE, lightmaps + (lightmapnum * BLOCK_HEIGHT + theRect->t) * BLOCK_WIDTH * LIGHTMAP_BYTES);
+				theRect->l = BLOCK_WIDTH;
+				theRect->t = BLOCK_HEIGHT;
+				theRect->h = 0;
+				theRect->w = 0;
 			}
 			else
 			{
-				qglEnableClientState(GL_VERTEX_ARRAY);
-				qglEnableClientState(GL_NORMAL_ARRAY);
-				qglBindBufferARB( GL_ARRAY_BUFFER_ARB, r_wsurf.hVBO );
-
-				if (drawpolynocolor)
-				{
-					R_BeginVertexArrayNoTexture();
-					R_DrawVertexArray(bface);
-				}
-				else
-				{
-					R_BeginVertexArrayTexture(detail);
-					R_DrawVertexArray(bface);
-					if (detail) R_EndDetailTexture();
-					R_EndVertexArrayTexture(detail);					
-				}
-				
-				if (!drawpolynocolor)
-				{
-					R_SetGBufferRenderState(1);
-					R_DrawPolyWireFrame(bface, R_DrawVertexArray);
-				}
-
-				qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
-				qglDisableClientState(GL_NORMAL_ARRAY);
-				qglDisableClientState(GL_VERTEX_ARRAY);
+				glRect_t *theRect = (glRect_t *)((char *)lightmap_rectchange + sizeof(glRect_t) * lightmapnum);
+				qglTexSubImage2D(GL_TEXTURE_2D, 0, 0, theRect->t, BLOCK_WIDTH, theRect->h, GL_RGBA, GL_UNSIGNED_BYTE, lightmaps + (lightmapnum * BLOCK_HEIGHT + theRect->t) * BLOCK_WIDTH * LIGHTMAP_BYTES);
+				theRect->l = BLOCK_WIDTH;
+				theRect->t = BLOCK_HEIGHT;
+				theRect->h = 0;
+				theRect->w = 0;
 			}
+		}
 
-			if (!gl_texsort->value && s->pdecals && !drawpolynocolor)
-			{
-				gDecalSurfs[(*gDecalSurfCount)] = s;
-				(*gDecalSurfCount)++;
+		r_wsurf.bDetailTexture = R_BeginDetailTexture(t->gl_texturenum);
 
-				if ((*gDecalSurfCount) > MAX_DECALSURFS)
-					Sys_ErrorEx("Too many decal surfaces!\n");
+		int GBufferProgramState = GBUFFER_DIFFUSE_ENABLED | GBUFFER_LIGHTMAP_ENABLED;
 
-				if ((*currententity)->curstate.rendermode != kRenderTransColor)
-				{
-					R_DrawDecals(true);
-				}
-			}
+		if (r_wsurf.bDetailTexture)
+		{
+			GBufferProgramState |= GBUFFER_DETAILTEXTURE_ENABLED;
+		}
 
-			return;
+		if (r_rotate_entity)
+		{
+			GBufferProgramState |= GBUFFER_ROTATE_ENABLED;
+		}
+
+		R_UseGBufferProgram(GBufferProgramState);
+
+		R_SetGBufferMask(GBUFFER_MASK_ALL);
+
+		if (s->flags & SURF_DRAWTILED)
+		{
+			DrawGLPolyScroll(s, (*currententity));
 		}
 		else
 		{
-			auto p = s->polys;
-			auto t = gRefFuncs.R_TextureAnimation(s);
+			DrawGLPoly(s);
+		}
 
-			if (!drawpolynocolor)
+		R_EndDetailTexture();
+
+		r_wsurf.bLightmapTexture = false;
+
+		if (s->pdecals )
+		{
+			gDecalSurfs[(*gDecalSurfCount)] = s;
+			(*gDecalSurfCount)++;
+
+			if ((*gDecalSurfCount) > MAX_DECALSURFS)
+				Sys_ErrorEx("Too many decal surfaces!\n");
+
+			if ((*currententity)->curstate.rendermode != kRenderTransColor)
 			{
-				R_SetGBufferRenderState(1);
-				GL_DisableMultitexture();
-				GL_Bind(t->gl_texturenum);
-			}
-
-			if (s->flags & SURF_DRAWTILED)
-			{
-				DrawGLPolyScroll(s, (*currententity));
-			}
-			else
-			{
-				DrawGLPoly(s);
-			}
-
-			if (!gl_texsort->value && s->pdecals && !drawpolynocolor)
-			{
-				gDecalSurfs[(*gDecalSurfCount)] = s;
-				(*gDecalSurfCount)++;
-
-				if ((*gDecalSurfCount) > MAX_DECALSURFS)
-					Sys_ErrorEx("Too many decal surfaces!\n");
-
-				R_DrawDecals(false);
-			}
-
-			if (gl_wireframe->value && !drawpolynocolor)
-			{
-				qglDisable(GL_TEXTURE_2D);
-				qglColor3f(1, 1, 1);
-
-				if (gl_wireframe->value == 2)
-					qglDisable(GL_DEPTH_TEST);
-
-				qglBegin(GL_LINE_LOOP);
-				auto v = p->verts[0];
-				for (int i = 0; i < p->numverts; i++, v += VERTEXSIZE)
-				{
-					qglVertex3fv(v);
-				}
-				qglEnd();
-				qglEnable(GL_TEXTURE_2D);
-
-				if (gl_wireframe->value == 2)
-					qglEnable(GL_DEPTH_TEST);
-			}
-
-			if ((*currententity)->curstate.rendermode == kRenderNormal)
-			{
-				if (!drawpolynocolor)
-				{
-					if (drawgbuffer)
-					{
-						//todo
-					}
-					else
-					{
-						GL_Bind(lightmap_textures[s->lightmaptexturenum]);
-						qglEnable(GL_BLEND);
-						qglBegin(GL_POLYGON);
-						auto v = p->verts[0];
-						for (int i = 0; i < p->numverts; i++, v += VERTEXSIZE)
-						{
-							qglTexCoord2f(v[5], v[6]);
-							qglVertex3fv(v);
-						}
-						qglEnd();
-						qglDisable(GL_BLEND);
-					}
-				}
+				R_DrawDecals(true);
 			}
 		}
+
 		return;
+	}
+	else 
+	{
+		//No Lightmap for entity other than kRenderNormal and kRenderTransAlpha
+
+		auto p = s->polys;
+		auto brushface = &r_wsurf.vFaceBuffer[p->flags];
+		auto t = gRefFuncs.R_TextureAnimation(s); 
+
+		GL_DisableMultitexture();
+		GL_Bind(t->gl_texturenum);
+
+		r_wsurf.bDetailTexture = R_BeginDetailTexture(t->gl_texturenum);
+
+		int GBufferProgramState = GBUFFER_DIFFUSE_ENABLED;
+
+		if (r_wsurf.bDetailTexture)
+		{
+			GBufferProgramState |= GBUFFER_DETAILTEXTURE_ENABLED;
+		}
+
+		if (r_rotate_entity)
+		{
+			GBufferProgramState |= GBUFFER_ROTATE_ENABLED;
+		}
+
+		R_UseGBufferProgram(GBufferProgramState);
+
+		R_SetGBufferMask(GBUFFER_MASK_ALL);
+
+		if (s->flags & SURF_DRAWTILED)
+		{
+			DrawGLPolyScroll(s, (*currententity));
+		}
+		else
+		{
+			DrawGLPoly(s);
+		}
+
+		R_EndDetailTexture();
+
+		if (s->pdecals)
+		{
+			gDecalSurfs[(*gDecalSurfCount)] = s;
+			(*gDecalSurfCount)++;
+
+			if ((*gDecalSurfCount) > MAX_DECALSURFS)
+				Sys_ErrorEx("Too many decal surfaces!\n");
+
+			R_DrawDecals(false);
+		}
 	}
 }
 
@@ -1601,4 +1385,353 @@ void R_LoadBSPEntities(void)
 			r_3dsky_parm.enable = true;
 		}
 	}//end for
+}
+
+void R_DrawSequentialPolyVBO(msurface_t *s)
+{
+	R_RenderDynamicLightmaps(s);
+
+	auto lightmapnum = s->lightmaptexturenum;
+
+	if (lightmap_modified[lightmapnum])
+	{
+		lightmap_modified[lightmapnum] = 0;
+		if (g_iEngineType == ENGINE_SVENGINE)
+		{
+			glRect_SvEngine_t *theRect = (glRect_SvEngine_t *)((char *)lightmap_rectchange + sizeof(glRect_SvEngine_t) * lightmapnum);
+			qglBindTexture(GL_TEXTURE_2D_ARRAY, r_wsurf.iLightmapTextureArray);
+			qglTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, theRect->t, lightmapnum, BLOCK_WIDTH, theRect->h, 1, GL_RGBA, GL_UNSIGNED_BYTE, lightmaps + (lightmapnum * BLOCK_HEIGHT + theRect->t) * BLOCK_WIDTH * LIGHTMAP_BYTES);
+			qglBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+			theRect->l = BLOCK_WIDTH;
+			theRect->t = BLOCK_HEIGHT;
+			theRect->h = 0;
+			theRect->w = 0;
+		}
+		else
+		{
+			glRect_t *theRect = (glRect_t *)((char *)lightmap_rectchange + sizeof(glRect_t) * lightmapnum);
+			qglBindTexture(GL_TEXTURE_2D_ARRAY, r_wsurf.iLightmapTextureArray);
+			qglTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, theRect->t, lightmapnum, BLOCK_WIDTH, theRect->h, 1, GL_RGBA, GL_UNSIGNED_BYTE, lightmaps + (lightmapnum * BLOCK_HEIGHT + theRect->t) * BLOCK_WIDTH * LIGHTMAP_BYTES);
+			qglBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+			theRect->l = BLOCK_WIDTH;
+			theRect->t = BLOCK_HEIGHT;
+			theRect->h = 0;
+			theRect->w = 0;
+		}
+	}
+
+	if (s->pdecals)
+	{
+		gDecalSurfs[(*gDecalSurfCount)] = s;
+		(*gDecalSurfCount)++;
+
+		if ((*gDecalSurfCount) > MAX_DECALSURFS)
+			Sys_ErrorEx("Too many decal surfaces!\n");
+
+		if ((*currententity)->curstate.rendermode != kRenderTransColor)
+		{
+			R_DrawDecals(true);
+		}
+	}
+}
+
+void R_RecursiveWorldNodeVBO(mnode_t *node)
+{
+	int c, side;
+	mplane_t *plane;
+	msurface_t *surf;
+	float dot;
+
+	if (node->contents == CONTENTS_SOLID)
+		return;
+
+	if (node->visframe != (*r_visframecount))
+		return;
+
+	if (R_CullBox(node->minmaxs, node->minmaxs + 3))
+		return;
+
+	if (node->contents < 0)
+	{
+		auto pleaf = (mleaf_t *)node;
+
+		auto mark = pleaf->firstmarksurface;
+		c = pleaf->nummarksurfaces;
+
+		if (c)
+		{
+			do
+			{
+				(*mark)->visframe = (*r_framecount);
+				mark++;
+			} while (--c);
+		}
+
+		//if (pleaf->efrags)
+		//	R_StoreEfrags(&pleaf->efrags);
+
+		return;
+	}
+
+	plane = node->plane;
+
+	switch (plane->type)
+	{
+	case PLANE_X:
+	{
+		dot = r_refdef->vieworg[0] - plane->dist;
+		break;
+	}
+
+	case PLANE_Y:
+	{
+		dot = r_refdef->vieworg[1] - plane->dist;
+		break;
+	}
+
+	case PLANE_Z:
+	{
+		dot = r_refdef->vieworg[2] - plane->dist;
+		break;
+	}
+
+	default:
+	{
+		dot = DotProduct(r_refdef->vieworg, plane->normal) - plane->dist;
+		break;
+	}
+	}
+
+	if (dot >= 0)
+		side = 0;
+	else
+		side = 1;
+
+	R_RecursiveWorldNodeVBO(node->children[side]);
+
+	c = node->numsurfaces;
+
+	if (c)
+	{
+		surf = r_worldmodel->surfaces + node->firstsurface;
+
+		if (dot < 0 - BACKFACE_EPSILON)
+			side = SURF_PLANEBACK;
+		else if (dot > BACKFACE_EPSILON)
+			side = 0;
+
+		for (; c; c--, surf++)
+		{
+			if (surf->visframe != (*r_framecount))
+				continue;
+
+			if (!(surf->flags & SURF_UNDERWATER) && ((dot < 0) ^ !!(surf->flags & SURF_PLANEBACK)))
+				continue;
+
+			if (surf->flags & SURF_DRAWSKY)
+			{
+				surf->texturechain = (*skychain);
+				(*skychain) = surf;
+			}
+			else if (surf->flags & SURF_DRAWTURB)
+			{
+				surf->texturechain = (*waterchain);
+				(*waterchain) = surf;
+			}
+			else
+			{
+				R_DrawSequentialPolyVBO(surf);
+			}
+		}
+	}
+
+	R_RecursiveWorldNodeVBO(node->children[!side]);
+}
+
+void R_DrawWorld(void)
+{
+	R_BeginRenderGBuffer();
+
+	if (gl_wireframe->value)
+	{
+		qglEnable(GL_POLYGON_OFFSET_FILL);
+		qglPolygonOffset(1.0f, 1.0f);
+		(*r_polygon_offset) = 1.0;
+	}
+
+	cl_entity_t tempent = { 0 };
+	VectorCopy(r_refdef->vieworg, modelorg);
+	tempent.model = r_worldmodel;
+	tempent.curstate.rendercolor.r = cshift_water->destcolor[0];
+	tempent.curstate.rendercolor.g = cshift_water->destcolor[1];
+	tempent.curstate.rendercolor.b = cshift_water->destcolor[2];
+
+	(*currententity) = &tempent;
+	*currenttexture = -1;
+
+	qglColor3f(1.0f, 1.0f, 1.0f);
+	memset(lightmap_polys, 0, sizeof(glpoly_t *) * 1024);
+	R_ClearSkyBox();
+
+	qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+
+	if (r_wsurf_vbo->value)
+	{
+		GL_DisableMultitexture();
+
+		qglActiveTextureARB(TEXTURE1_SGIS);
+		qglEnable(GL_TEXTURE_2D_ARRAY);
+		qglBindTexture(GL_TEXTURE_2D_ARRAY, r_wsurf.iLightmapTextureArray);
+
+		qglActiveTextureARB(TEXTURE0_SGIS);
+		qglEnable(GL_TEXTURE_2D);
+
+		qglEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+
+		R_SetVBOState(VBOSTATE_LIGHTMAP_TEXTURE);
+
+		//prepare shader for non-GBuffer mode?
+		for (size_t i = 0; i < r_wsurf.vTextureChainStatic.size(); ++i)
+		{
+			auto &texchain = r_wsurf.vTextureChainStatic[i];
+
+			qglBindTexture(GL_TEXTURE_2D, texchain.pTexture->gl_texturenum);
+
+			r_wsurf.bDetailTexture = R_BeginDetailTexture(texchain.pTexture->gl_texturenum);
+
+			if(r_wsurf.bDetailTexture)
+				R_SetVBOState(VBOSTATE_DETAIL_TEXTURE);
+			else
+				R_SetVBOState(VBOSTATE_LIGHTMAP_TEXTURE);
+
+			if (!drawgbuffer)
+			{
+				wsurf_program_t wprog = { 0 };
+				R_UseWSurfProgram(r_wsurf.bDetailTexture ? 
+					WSURF_DIFFUSE_ENABLED | WSURF_LIGHTMAP_ENABLED | WSURF_DETAILTEXTURE_ENABLED : 
+					WSURF_DIFFUSE_ENABLED | WSURF_LIGHTMAP_ENABLED, &wprog);
+				if (wprog.program)
+				{
+					qglUniform1fARB(wprog.speed, 0);
+				}
+			}
+			else
+			{
+				R_SetGBufferMask(GBUFFER_MASK_ALL);
+
+				gbuffer_program_t gprog = { 0 };
+				R_UseGBufferProgram(r_wsurf.bDetailTexture ? 
+					GBUFFER_DIFFUSE_ENABLED | GBUFFER_LIGHTMAP_ENABLED | GBUFFER_LIGHTMAP_ARRAY_ENABLED | GBUFFER_DETAILTEXTURE_ENABLED :
+					GBUFFER_DIFFUSE_ENABLED | GBUFFER_LIGHTMAP_ENABLED | GBUFFER_LIGHTMAP_ARRAY_ENABLED,
+					&gprog);
+			}
+
+			qglDrawElements(GL_POLYGON, texchain.iVertexCount, GL_UNSIGNED_INT, BUFFER_OFFSET(texchain.iStartIndex));
+
+			R_EndDetailTexture();
+
+			r_wsurf_drawcall++;
+
+			(*c_brush_polys) += texchain.iFaceCount;
+		}
+
+		//Use scrolling shader
+		float speed = ((*currententity)->curstate.rendercolor.b + ((*currententity)->curstate.rendercolor.g << 8)) / 16.0;
+		if ((*currententity)->curstate.rendercolor.r == 0)
+			speed = -speed;
+		speed *= (*cl_time);
+
+		for (size_t i = 0; i < r_wsurf.vTextureChainScroll.size(); ++i)
+		{
+			auto &texchain = r_wsurf.vTextureChainScroll[i];
+
+			qglBindTexture(GL_TEXTURE_2D, texchain.pTexture->gl_texturenum);
+
+			r_wsurf.bDetailTexture = R_BeginDetailTexture(texchain.pTexture->gl_texturenum);
+
+			if (r_wsurf.bDetailTexture)
+				R_SetVBOState(VBOSTATE_DETAIL_TEXTURE);
+			else
+				R_SetVBOState(VBOSTATE_LIGHTMAP_TEXTURE);
+
+			if (!drawgbuffer)
+			{
+				wsurf_program_t wprog2 = { 0 };
+				R_UseWSurfProgram(r_wsurf.bDetailTexture ? 
+					WSURF_DIFFUSE_ENABLED | WSURF_LIGHTMAP_ENABLED | WSURF_DETAILTEXTURE_ENABLED :
+					WSURF_DIFFUSE_ENABLED | WSURF_LIGHTMAP_ENABLED, 
+						&wprog2);
+				if (wprog2.program)
+				{
+					qglUniform1fARB(wprog2.speed, speed);
+				}
+			}
+			else
+			{
+				gbuffer_program_t gprog2 = { 0 };
+				R_UseGBufferProgram(r_wsurf.bDetailTexture ?
+					GBUFFER_DIFFUSE_ENABLED | GBUFFER_LIGHTMAP_ENABLED | GBUFFER_LIGHTMAP_ARRAY_ENABLED | GBUFFER_SCROLL_ENABLED | GBUFFER_DETAILTEXTURE_ENABLED :
+					GBUFFER_DIFFUSE_ENABLED | GBUFFER_LIGHTMAP_ENABLED | GBUFFER_LIGHTMAP_ARRAY_ENABLED | GBUFFER_SCROLL_ENABLED,
+					&gprog2);
+				if (gprog2.program)
+				{
+					qglUniform1fARB(gprog2.speed, speed);
+				}
+			}
+
+			qglDrawElements(GL_POLYGON, texchain.iVertexCount, GL_UNSIGNED_INT, BUFFER_OFFSET(texchain.iStartIndex));
+
+			R_EndDetailTexture();
+
+			r_wsurf_drawcall++;
+			(*c_brush_polys) += texchain.iFaceCount;
+		}
+
+		qglUseProgramObjectARB(0);
+
+		R_SetVBOState(VBOSTATE_OFF);
+
+		qglDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+
+		qglActiveTextureARB(TEXTURE1_SGIS);
+		qglDisable(GL_TEXTURE_2D_ARRAY);
+		qglActiveTextureARB(TEXTURE0_SGIS);
+
+		(*gDecalSurfCount) = 0;
+		R_RecursiveWorldNodeVBO(r_worldmodel->nodes);
+		(*gDecalSurfCount) = 0;
+	}
+	else
+	{
+		(*gDecalSurfCount) = 0;
+		R_RecursiveWorldNode(r_worldmodel->nodes);
+		(*gDecalSurfCount) = 0;
+	}
+
+	(*currententity) = gEngfuncs.GetEntityByIndex(0);
+
+	GL_DisableMultitexture();
+
+	if ((*skychain))
+	{
+		R_DrawSkyChain((*skychain));
+		(*skychain) = 0;
+	}
+
+	if ((*waterchain))
+	{
+		for (auto s = (*waterchain); s; s = s->texturechain)
+		{
+			qglColor4ub(255, 255, 255, 255);
+			GL_Bind(s->texinfo->texture->gl_texturenum);
+			EmitWaterPolys(s, 0);
+		}
+		(*waterchain) = 0;
+	}
+
+	if (gl_wireframe->value)
+	{
+		qglDisable(GL_POLYGON_OFFSET_FILL);
+		(*r_polygon_offset) = 0.0;
+	}
 }

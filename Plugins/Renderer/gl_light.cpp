@@ -1,4 +1,5 @@
 #include "gl_local.h"
+#include <sstream>
 
 int r_light_env_color[4] = { 0 };
 qboolean r_light_env_color_exists = false;
@@ -16,49 +17,110 @@ cvar_t *r_light_specularpow = NULL;
 cvar_t *r_flashlight_distance = NULL;
 cvar_t *r_flashlight_cone = NULL;
 
-bool drawpolynocolor = false;
 bool drawgbuffer = false;
 
-SHADER_DEFINE(gbuffer1);
-SHADER_DEFINE(gbuffer2);
-SHADER_DEFINE(gbuffer3);
-SHADER_DEFINE(gbuffer4);
+int gbuffer_mask = -1;
+
 SHADER_DEFINE(dlight_spot);
 SHADER_DEFINE(dlight_point);
 SHADER_DEFINE(dlight_final);
 
-void R_InitLight(void)
+std::unordered_map<int, gbuffer_program_t> g_GBufferProgramTable;
+
+void R_UseGBufferProgram(int state, gbuffer_program_t *progOutput)
 {
-	if (gl_shader_support)
+	if (!drawgbuffer)
+		return;
+
+	gbuffer_program_t prog = { 0 };
+
+	auto itor = g_GBufferProgramTable.find(state);
+	if (itor == g_GBufferProgramTable.end())
 	{
-		gbuffer1.program = R_CompileShaderFile("resource\\shader\\gbuffer_shader.vsh", NULL, "resource\\shader\\gbuffer_shader.fsh");
-		if (gbuffer1.program)
+		std::stringstream defs;
+
+		if (state & GBUFFER_DIFFUSE_ENABLED)
+			defs << "#define DIFFUSE_ENABLED\n";
+
+		if (state & GBUFFER_LIGHTMAP_ENABLED)
+			defs << "#define LIGHTMAP_ENABLED\n";
+
+		if (state & GBUFFER_DETAILTEXTURE_ENABLED)
+			defs << "#define DETAILTEXTURE_ENABLED\n";
+
+		if (state & GBUFFER_LIGHTMAP_ARRAY_ENABLED)
+			defs << "#define LIGHTMAP_ARRAY_ENABLED\n";
+
+		if (state & GBUFFER_TRANSPARENT_ENABLED)
+			defs << "#define TRANSPARENT_ENABLED\n";
+
+		if (state & GBUFFER_SCROLL_ENABLED)
+			defs << "#define SCROLL_ENABLED\n";
+
+		if (state & GBUFFER_ROTATE_ENABLED)
+			defs << "#define ROTATE_ENABLED\n";
+
+		auto def = defs.str();
+
+		prog.program = R_CompileShaderFileEx("resource\\shader\\gbuffer_shader.vsh", NULL, "resource\\shader\\gbuffer_shader.fsh", def.c_str(), NULL, def.c_str());
+		if (prog.program)
 		{
-			SHADER_UNIFORM(gbuffer1, diffuseTex, "diffuseTex");
+			SHADER_UNIFORM(prog, diffuseTex, "diffuseTex");
+			SHADER_UNIFORM(prog, lightmapTex, "lightmapTex");
+			SHADER_UNIFORM(prog, lightmapTexArray, "lightmapTexArray");
+			SHADER_UNIFORM(prog, detailTex, "detailTex");
+			SHADER_UNIFORM(prog, speed, "speed");
+			SHADER_UNIFORM(prog, entitymatrix, "entitymatrix");
 		}
-		gbuffer2.program = R_CompileShaderFileEx("resource\\shader\\gbuffer_shader.vsh", NULL, "resource\\shader\\gbuffer_shader.fsh",
-			"#define LIGHTMAP_ENABLED", NULL, "#define LIGHTMAP_ENABLED");
-		if (gbuffer2.program)
-		{
-			SHADER_UNIFORM(gbuffer2, diffuseTex, "diffuseTex");
-			SHADER_UNIFORM(gbuffer2, lightmapTex, "lightmapTex");
-		}
-		gbuffer3.program = R_CompileShaderFileEx("resource\\shader\\gbuffer_shader.vsh", NULL, "resource\\shader\\gbuffer_shader.fsh",
-			"#define LIGHTMAP_ENABLED\n#define DETAILTEXTURE_ENABLED", NULL, "#define LIGHTMAP_ENABLED\n#define DETAILTEXTURE_ENABLED");
-		if (gbuffer3.program)
-		{
-			SHADER_UNIFORM(gbuffer3, diffuseTex, "diffuseTex");
-			SHADER_UNIFORM(gbuffer3, lightmapTex, "lightmapTex");
-			SHADER_UNIFORM(gbuffer3, detailTex, "detailTex");
-		}
-		gbuffer4.program = R_CompileShaderFileEx("resource\\shader\\gbuffer_shader.vsh", NULL, "resource\\shader\\gbuffer_shader.fsh",
-			"#define TRANSPARENT_ENABLED", NULL, "#define TRANSPARENT_ENABLED");
-		if (gbuffer4.program)
-		{
-			SHADER_UNIFORM(gbuffer4, diffuseTex, "diffuseTex");
-		}
+
+		g_GBufferProgramTable[state] = prog;
+	}
+	else
+	{
+		prog = itor->second;
 	}
 
+	if (prog.program)
+	{
+		qglUseProgramObjectARB(prog.program);
+
+		if (prog.diffuseTex != -1)
+			qglUniform1iARB(prog.diffuseTex, 0);
+		if (prog.lightmapTexArray != -1)
+			qglUniform1iARB(prog.lightmapTexArray, 1);
+		if (prog.lightmapTex != -1)
+			qglUniform1iARB(prog.lightmapTex, 1);
+		if (prog.detailTex != -1)
+			qglUniform1iARB(prog.detailTex, 2);
+		if (prog.entitymatrix != -1)
+		{
+			if(r_rotate_entity)
+				qglUniformMatrix4fvARB(prog.entitymatrix, 1, false, r_rotate_entity_matrix);
+			else
+				qglUniformMatrix4fvARB(prog.entitymatrix, 1, false, r_identity_matrix);
+		}
+
+		if (progOutput)
+			*progOutput = prog;
+	}
+	else
+	{
+		Sys_ErrorEx("R_UseGBufferProgram: Failed to load program!");
+	}
+}
+
+void R_UseGBufferProgram(int state)
+{
+	return R_UseGBufferProgram(state, NULL);
+}
+
+void R_ShutdownLight(void)
+{
+	g_GBufferProgramTable.clear();
+}
+
+void R_InitLight(void)
+{
 	if (gl_shader_support)
 	{
 		dlight_spot.program = R_CompileShaderFileEx("resource\\shader\\dlight_shader.vsh", NULL, "resource\\shader\\dlight_shader.fsh",
@@ -127,8 +189,7 @@ void R_InitLight(void)
 
 	r_flashlight_distance = gEngfuncs.pfnRegisterVariable("r_flashlight_distance", "2000", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_flashlight_cone = gEngfuncs.pfnRegisterVariable("r_flashlight_cone", "0.9", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
-	
-	drawpolynocolor = false;
+
 	drawgbuffer = false;
 }
 
@@ -147,71 +208,41 @@ bool R_IsDLightFlashlight(dlight_t *dl)
 	return false;
 }
 
-void R_SetRenderGBufferDecal(void)
+void R_SetGBufferMask(int mask)
 {
 	if (!drawgbuffer)
-	{
 		return;
-	}
-	GLuint attachments[1] = { GL_COLOR_ATTACHMENT0 };
-	qglDrawBuffers(1, attachments);
-}
 
-void R_SetRenderGBufferWater(void)
-{
-	if (!drawgbuffer)
-	{
+	if (gbuffer_mask == mask)
 		return;
+
+	gbuffer_mask = mask;
+
+	GLuint attachments[4] = {0};
+	int attachCount = 0;
+
+	if (mask & GBUFFER_MASK_DIFFUSE)
+	{
+		attachments[attachCount] = GL_COLOR_ATTACHMENT0;
+		attachCount++;
+	}
+	if (mask & GBUFFER_MASK_LIGHTMAP)
+	{
+		attachments[attachCount] = GL_COLOR_ATTACHMENT1;
+		attachCount++;
+	}
+	if (mask & GBUFFER_MASK_WORLD)
+	{
+		attachments[attachCount] = GL_COLOR_ATTACHMENT2;
+		attachCount++;
+	}
+	if (mask & GBUFFER_MASK_NORMAL)
+	{
+		attachments[attachCount] = GL_COLOR_ATTACHMENT3;
+		attachCount++;
 	}
 
-	GLuint attachments[3] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3 };
-	qglDrawBuffers(3, attachments);
-}
-
-void R_SetRenderGBufferAll(void)
-{
-	if (!drawgbuffer)
-	{
-		return;
-	}
-
-	GLuint attachments[4] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3 };
-	qglDrawBuffers(4, attachments);
-}
-
-void R_SetGBufferRenderState(int state)
-{
-	if (!drawgbuffer)
-	{
-		return;
-	}
-
-	//diffuse only, use glColor as lightmapColor
-	if (state == 1)
-	{
-		qglUseProgramObjectARB(gbuffer1.program);
-		qglUniform1iARB(gbuffer1.diffuseTex, 0);
-	}
-	//lightmap
-	else if (state == 2)
-	{
-		qglUseProgramObjectARB(gbuffer2.program);
-		qglUniform1iARB(gbuffer2.diffuseTex, 0);
-		qglUniform1iARB(gbuffer2.lightmapTex, 1);
-	}
-	//lightmap + detailtexture
-	else if (state == 3)
-	{		
-		qglUseProgramObjectARB(gbuffer3.program);
-		qglUniform1iARB(gbuffer3.diffuseTex, 0);
-		qglUniform1iARB(gbuffer3.lightmapTex, 1);
-		qglUniform1iARB(gbuffer3.detailTex, 2);
-	}
-	else if (state == 4)
-	{
-		qglUseProgramObjectARB(gbuffer4.program);
-		qglUniform1iARB(gbuffer4.diffuseTex, 0);
-	}
+	qglDrawBuffers(attachCount, attachments);
 }
 
 void R_BeginRenderGBuffer(void)
@@ -222,14 +253,17 @@ void R_BeginRenderGBuffer(void)
 	if (!r_light_dynamic->value)
 		return;
 
+	if (!s_GBufferFBO.s_hBackBufferFBO)
+		return;
+
 	drawgbuffer = true;
+	gbuffer_mask = -1;
 
 	GL_PushFrameBuffer();
 
 	qglBindFramebufferEXT(GL_FRAMEBUFFER, s_GBufferFBO.s_hBackBufferFBO);
 
-	R_SetGBufferRenderState(2);
-	R_SetRenderGBufferAll();
+	R_SetGBufferMask(GBUFFER_MASK_ALL);
 
 	qglClearColor(0, 0, 0, 1);
 	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -241,6 +275,7 @@ void R_EndRenderGBuffer(void)
 		return;
 
 	drawgbuffer = false;
+	gbuffer_mask = -1;
 
 	GL_PushDrawState();
 	GL_PushMatrix();
@@ -318,9 +353,9 @@ void R_EndRenderGBuffer(void)
 			qglUseProgramObjectARB(dlight_spot.program);
 			qglUniform1iARB(dlight_spot.positionTex, 0);
 			qglUniform1iARB(dlight_spot.normalTex, 1);
-			qglUniform3fARB(dlight_spot.viewpos, r_refdef->vieworg[0], r_refdef->vieworg[1], r_refdef->vieworg[2]);
-			qglUniform3fARB(dlight_spot.lightdir, dlight_vforward[0], dlight_vforward[1], dlight_vforward[2]);
-			qglUniform3fARB(dlight_spot.lightpos, dlight_origin[0], dlight_origin[1], dlight_origin[2]);
+			qglUniform4fARB(dlight_spot.viewpos, r_refdef->vieworg[0], r_refdef->vieworg[1], r_refdef->vieworg[2], 1.0f);
+			qglUniform4fARB(dlight_spot.lightdir, dlight_vforward[0], dlight_vforward[1], dlight_vforward[2], 0.0f);
+			qglUniform4fARB(dlight_spot.lightpos, dlight_origin[0], dlight_origin[1], dlight_origin[2], 1.0f);
 			qglUniform3fARB(dlight_spot.lightcolor, (float)dl->color.r / 255.0f, (float)dl->color.g / 255.0f, (float)dl->color.b / 255.0f);
 			qglUniform1fARB(dlight_spot.lightcone, r_flashlight_cone->value);
 			qglUniform1fARB(dlight_spot.lightradius, r_flashlight_distance->value);
@@ -341,8 +376,8 @@ void R_EndRenderGBuffer(void)
 			qglUseProgramObjectARB(dlight_point.program);
 			qglUniform1iARB(dlight_point.positionTex, 0);
 			qglUniform1iARB(dlight_point.normalTex, 1);
-			qglUniform3fARB(dlight_point.viewpos, r_refdef->vieworg[0], r_refdef->vieworg[1], r_refdef->vieworg[2]);
-			qglUniform3fARB(dlight_point.lightpos, dlight_origin[0], dlight_origin[1], dlight_origin[2]);
+			qglUniform4fARB(dlight_point.viewpos, r_refdef->vieworg[0], r_refdef->vieworg[1], r_refdef->vieworg[2], 1.0f);
+			qglUniform4fARB(dlight_point.lightpos, dlight_origin[0], dlight_origin[1], dlight_origin[2], 1.0f);
 			qglUniform3fARB(dlight_point.lightcolor, (float)dl->color.r / 255.0f, (float)dl->color.g / 255.0f, (float)dl->color.b / 255.0f);
 			qglUniform1fARB(dlight_point.lightradius, dl->radius);
 			qglUniform1fARB(dlight_point.lightambient, r_light_ambient->value);
@@ -402,6 +437,7 @@ void R_EndRenderGBuffer(void)
 		GL_DisableMultitexture();
 		qglDisable(GL_BLEND);
 		qglDisable(GL_DEPTH_TEST);
+		qglDisable(GL_ALPHA_TEST);
 		qglDepthMask(GL_FALSE);
 
 		R_BeginFXAA(glwidth, glheight);		

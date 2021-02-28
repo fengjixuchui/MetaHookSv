@@ -116,7 +116,6 @@ ref_export_t gRefExports =
 {
 	//common
 	R_GetDrawPass,
-	R_GetSupportExtension,
 	//refdef
 	R_PushRefDef,
 	R_PopRefDef,
@@ -220,8 +219,6 @@ void HUD_Init(void)
 
 int HUD_VidInit(void)
 {
-	R_VidInit();
-
 	return gExportfuncs.HUD_VidInit();
 }
 
@@ -236,10 +233,7 @@ void HUD_DrawNormalTriangles(void)
 {
 	gExportfuncs.HUD_DrawNormalTriangles();
 
-	if (drawgbuffer)
-	{
-		R_EndRenderGBuffer();
-	}
+	R_EndRenderGBuffer();
 
 	if (!drawreflect && !drawrefract)
 	{
@@ -564,8 +558,8 @@ int HUD_GetStudioModelInterface(int version, struct r_studio_interface_s **ppint
 
 	//R_InitDetailTextures();
 	//Load global extra textures into array
-	R_LoadExtraTextureFile(false);
-	R_LoadStudioTextures(false);
+	//R_LoadExtraTextureFile(false);
+	//R_LoadStudioTextures(false);
 
 	cl_sprite_white = IEngineStudio.Mod_ForName("sprites/white.spr", 1);
 

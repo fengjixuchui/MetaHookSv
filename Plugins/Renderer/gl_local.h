@@ -20,9 +20,7 @@
 #include "bspfile.h"
 #include "qgl.h"
 
-#include "gl_const.h"
 #include "gl_shader.h"
-#include "gl_model2.h"
 #include "gl_model.h"
 #include "enginedef.h"
 
@@ -76,6 +74,7 @@ extern vec_t *vright;
 extern vec_t *r_origin;
 extern vec_t *modelorg;
 extern vec_t *r_entorigin;
+extern float *r_world_matrix;
 
 extern int *r_framecount;
 extern int *r_visframecount;
@@ -92,12 +91,11 @@ extern qboolean gl_framebuffer_object;
 extern qboolean gl_shader_support;
 extern qboolean gl_program_support;
 extern qboolean gl_msaa_support;
-extern qboolean gl_msaa_blit_support;
+extern qboolean gl_blit_support;
 extern qboolean gl_csaa_support;
 extern qboolean gl_float_buffer_support;
 extern qboolean gl_s3tc_compression_support;
 
-extern int gl_mtexable;
 extern int gl_max_texture_size;
 extern float gl_max_ansio;
 extern float gl_force_ansio;
@@ -106,6 +104,7 @@ extern int gl_csaa_samples;
 
 extern int *gl_msaa_fbo;
 extern int *gl_backbuffer_fbo;
+extern int *gl_mtexable;
 
 extern qboolean *mtexenabled;
 
@@ -120,7 +119,7 @@ extern qboolean bNoStretchAspect;
 
 extern FBO_Container_t s_MSAAFBO;
 extern FBO_Container_t s_GBufferFBO;
-extern FBO_Container_t s_BackBufferFBO;
+extern FBO_Container_t s_BackBufferFBO, s_BackBufferFBO2;
 extern FBO_Container_t s_DownSampleFBO[DOWNSAMPLE_BUFFERS];
 extern FBO_Container_t s_LuminFBO[LUMIN_BUFFERS];
 extern FBO_Container_t s_Lumin1x1FBO[LUMIN1x1_BUFFERS];
@@ -134,10 +133,11 @@ extern FBO_Container_t s_CloakFBO;
 extern FBO_Container_t s_ShadowFBO;
 extern FBO_Container_t s_WaterFBO;
 
-extern int skytexturenum;
+extern int *skytexturenum;
 
 extern msurface_t **skychain;
 extern msurface_t **waterchain;
+extern int *gl_texsort_value;
 
 extern int *gSkyTexNumber;
 extern skybox_t *skymins;
@@ -234,6 +234,9 @@ void R_DrawSkyBox(void);
 void R_DrawEntitiesOnList(void);
 void R_RecursiveWorldNode(mnode_t *node);
 void R_DrawSequentialPoly(msurface_t *s, int face);
+void R_BlendLightmaps(void);
+void R_RenderBrushPoly(msurface_t *fa);
+void R_RotateForEntity(float *origin, cl_entity_t *ent);
 float *R_GetAttachmentPoint(int entity, int attachment);
 void R_DrawBrushModel(cl_entity_t *entity);
 void R_DrawSpriteModel(cl_entity_t *entity);
@@ -302,7 +305,6 @@ void R_PushRefDef(void);
 void R_UpdateRefDef(void);
 void R_PopRefDef(void);
 int R_GetDrawPass(void);
-int R_GetSupportExtension(void);
 
 void GL_FreeTexture(gltexture_t *glt);
 void GL_PushMatrix(void);
@@ -318,7 +320,10 @@ void CL_ScreenShot_f(void);
 //for hud or post-processing
 void R_InitGLHUD(void);
 
-extern double g_flFrameTime;
-extern int last_luminance;
-
 extern mplane_t custom_frustum[4];
+extern float r_identity_matrix[16];
+
+extern float r_rotate_entity_matrix[16];
+extern bool r_rotate_entity;
+
+#define BUFFER_OFFSET(i) ((unsigned int *)NULL + (i))

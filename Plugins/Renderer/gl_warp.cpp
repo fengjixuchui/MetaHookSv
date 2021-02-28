@@ -24,6 +24,10 @@ void EmitWaterPolysWireFrame(msurface_t *fa, int direction, qboolean useProgram)
 
 	if (gl_wireframe->value)
 	{
+		R_UseGBufferProgram(GBUFFER_TRANSPARENT_ENABLED);
+		R_SetGBufferMask(GBUFFER_MASK_DIFFUSE);
+
+
 		if (fa->polys->verts[0][2] >= r_refdef->vieworg[2])
 			scale = (*currententity)->curstate.scale;
 		else
@@ -111,7 +115,7 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 	tempVert[1] = p->verts[0][1];
 	tempVert[2] = p->verts[0][2];
 
-	auto bface = &r_wsurf.pFaceBuffer[p->flags];
+	auto brushface = &r_wsurf.vFaceBuffer[p->flags];
 
 	pSourcePalette = fa->texinfo->texture->pPal;
 	gWaterColor->r = pSourcePalette[9];
@@ -131,9 +135,12 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 		VectorAdd(tempVert, (*currententity)->curstate.origin, tempVert);
 	}
 	
-	R_SetGBufferRenderState(1);
+	R_SetVBOState(VBOSTATE_OFF);
 
-	if(r_water && r_water->value && water.program && !dontShader)
+	R_UseGBufferProgram(GBUFFER_DIFFUSE_ENABLED);
+	R_SetGBufferMask(GBUFFER_MASK_ALL);
+
+	if(r_water && r_water->value && !dontShader)
 	{
 		r_water_t *waterObject = NULL;
 
@@ -150,64 +157,35 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 
 		if(waterObject && waterObject->refractmap_ready && ((waterObject->reflectmap_ready && bAboveWater) || !bAboveWater))
 		{
-
 			float alpha = 1;
 			if ((*currententity)->curstate.rendermode == kRenderTransTexture)
 				alpha = (*r_blend);
 
-			if (bAboveWater)
+			int programState = 0;
+
+			if (!bAboveWater)
+				programState |= WATER_UNDERWATER_ENABLED;
+
+			if(drawgbuffer)
+				programState |= WATER_GBUFFER_ENABLED;
+
+			water_program_t prog = { 0 };
+			R_UseWaterProgram(programState, &prog);
+
+			if (prog.program)
 			{
-				if (drawgbuffer)
-				{
-					qglUseProgramObjectARB(watergbuffer.program);
-					qglUniform4fARB(watergbuffer.waterfogcolor, waterObject->color.r / 255.0f, waterObject->color.g / 255.0f, waterObject->color.b / 255.0f, alpha);
-					qglUniform3fARB(watergbuffer.eyepos, r_refdef->vieworg[0], r_refdef->vieworg[1], r_refdef->vieworg[2]);
-					qglUniform1fARB(watergbuffer.time, clientTime);
-					qglUniform1fARB(watergbuffer.fresnel, clamp(r_water_fresnel->value, 0.0, 10.0));
-					qglUniform1fARB(watergbuffer.depthfactor, clamp(r_water_depthfactor->value, 0.0, 1000.0));
-					qglUniform1fARB(watergbuffer.normfactor, clamp(r_water_normfactor->value, 0.0, 1000.0));
-					qglUniform1iARB(watergbuffer.normalmap, 0);
-					qglUniform1iARB(watergbuffer.refractmap, 1);
-					qglUniform1iARB(watergbuffer.reflectmap, 2);
-					qglUniform1iARB(watergbuffer.depthrefrmap, 3);
-				}
-				else
-				{
-					qglUseProgramObjectARB(water.program);
-					qglUniform4fARB(water.waterfogcolor, waterObject->color.r / 255.0f, waterObject->color.g / 255.0f, waterObject->color.b / 255.0f, alpha);
-					qglUniform3fARB(water.eyepos, r_refdef->vieworg[0], r_refdef->vieworg[1], r_refdef->vieworg[2]);
-					qglUniform1fARB(water.time, clientTime);
-					qglUniform1fARB(water.fresnel, clamp(r_water_fresnel->value, 0.0, 10.0));
-					qglUniform1fARB(water.depthfactor, clamp(r_water_depthfactor->value, 0.0, 1000.0));
-					qglUniform1fARB(water.normfactor, clamp(r_water_normfactor->value, 0.0, 1000.0));
-					qglUniform1iARB(water.normalmap, 0);
-					qglUniform1iARB(water.refractmap, 1);
-					qglUniform1iARB(water.reflectmap, 2);
-					qglUniform1iARB(water.depthrefrmap, 3);
-				}
-			}
-			else
-			{
-				if (drawgbuffer)
-				{
-					qglUseProgramObjectARB(underwatergbuffer.program);
-					qglUniform4fARB(underwatergbuffer.waterfogcolor, waterObject->color.r / 255.0f, waterObject->color.g / 255.0f, waterObject->color.b / 255.0f, alpha);
-					qglUniform3fARB(underwatergbuffer.eyepos, r_refdef->vieworg[0], r_refdef->vieworg[1], r_refdef->vieworg[2]);
-					qglUniform1fARB(underwatergbuffer.time, clientTime);
-					qglUniform1fARB(underwatergbuffer.normfactor, clamp(r_water_normfactor->value, 0.0, 1000.0));
-					qglUniform1iARB(underwatergbuffer.normalmap, 0);
-					qglUniform1iARB(underwatergbuffer.refractmap, 1);
-				}
-				else
-				{
-					qglUseProgramObjectARB(underwater.program);
-					qglUniform4fARB(underwater.waterfogcolor, waterObject->color.r / 255.0f, waterObject->color.g / 255.0f, waterObject->color.b / 255.0f, alpha);
-					qglUniform3fARB(underwater.eyepos, r_refdef->vieworg[0], r_refdef->vieworg[1], r_refdef->vieworg[2]);
-					qglUniform1fARB(underwater.time, clientTime);
-					qglUniform1fARB(underwater.normfactor, clamp(r_water_normfactor->value, 0.0, 1000.0));
-					qglUniform1iARB(underwater.normalmap, 0);
-					qglUniform1iARB(underwater.refractmap, 1);
-				}
+				if (prog.waterfogcolor != -1)
+					qglUniform4fARB(prog.waterfogcolor, waterObject->color.r / 255.0f, waterObject->color.g / 255.0f, waterObject->color.b / 255.0f, alpha);
+				if (prog.eyepos != -1)
+					qglUniform4fARB(prog.eyepos, r_refdef->vieworg[0], r_refdef->vieworg[1], r_refdef->vieworg[2], 1.0);
+				if (prog.time != -1)
+					qglUniform1fARB(prog.time, clientTime);
+				if (prog.fresnel != -1)
+					qglUniform1fARB(prog.fresnel, clamp(r_water_fresnel->value, 0.0, 10.0));
+				if (prog.depthfactor != -1)
+					qglUniform1fARB(prog.depthfactor, clamp(r_water_depthfactor->value, 0.0, 1000.0));
+				if (prog.normfactor != -1)
+					qglUniform1fARB(prog.normfactor, clamp(r_water_normfactor->value, 0.0, 1000.0));
 			}
 
 			qglEnable(GL_BLEND);
@@ -289,7 +267,7 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 				qglMultiTexCoord2fARB(TEXTURE0_SGIS, os, ot);
 			}
 
-			qglNormal3fv(bface->normal);
+			qglNormal3fv(brushface->normal);
 			qglVertex3fv(tempVert);
 
 			if (direction)
@@ -299,6 +277,9 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 		}
 
 		qglEnd();
+
+		r_wsurf_drawcall++;
+		(*c_brush_polys) ++;
 	}
 
 	if(useProgram)
@@ -318,14 +299,8 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 		qglUseProgramObjectARB(0);
 	}
 
-	R_SetGBufferRenderState(1);
-
 	EmitWaterPolysWireFrame(fa, direction, useProgram);
-
-	R_SetGBufferRenderState(2);
 }
-
-#define SKY_TEX 5800
 
 int *gSkyTexNumber;
 
@@ -573,9 +548,10 @@ void R_DrawSkyChain(msurface_t *s)
 		}
 	}
 
-	R_SetGBufferRenderState(1);
+	R_UseGBufferProgram(GBUFFER_DIFFUSE_ENABLED);
+	R_SetGBufferMask(GBUFFER_MASK_ALL);
+
 	R_DrawSkyBox();
-	R_SetGBufferRenderState(2);
 }
 
 void R_ClearSkyBox(void)
@@ -673,14 +649,14 @@ void R_DrawSkyBox(void)
 			order = skytexorder[i];
 		}
 
-		if(r_wsurf_sky->value > 0 && r_wsurf.iSkyTextures[order])
+		/*if(r_wsurf_sky->value > 0 && r_wsurf.iSkyTextures[order])
 		{
 			GL_Bind(r_wsurf.iSkyTextures[order]);
 		}
 		else
-		{
+		{*/
 			GL_Bind(gSkyTexNumber[order]);
-		}
+		//}
 
 		qglBegin(GL_QUADS);
 		qglNormal3fv(vNormalTable[i]);
