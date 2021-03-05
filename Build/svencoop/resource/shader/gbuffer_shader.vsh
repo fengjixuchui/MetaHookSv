@@ -48,5 +48,6 @@ void main()
 #endif
 
   color = gl_Color;
+
   gl_Position = ftransform();
 }

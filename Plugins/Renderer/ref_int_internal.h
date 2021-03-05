@@ -89,6 +89,11 @@ typedef struct
 	mleaf_t *(*Mod_PointInLeaf)(vec3_t p, model_t *model);
 	void *(*realloc_SvEngine)(void *, size_t);
 	dlight_t *(*CL_AllocDlight)(int key);
+	void (*S_ExtraUpdate)(void);
+	void(*R_PolyBlend)(void);
+
+	//SvClient
+	void(__fastcall *PortalManager_ResetAll)(int pthis, int);
 
 	//Engine Studio
 	void (*R_GLStudioDrawPoints)(void);
@@ -169,16 +174,8 @@ typedef struct
 	int (*SaveImageGeneric)(const char *filename, int width, int height, byte *data);
 	//capture screen
 	byte *(*R_GetSCRCaptureBuffer)(int *bufsize);
-	//3dsky
-	void (*R_Add3DSkyEntity)(cl_entity_t *ent);
-	void (*R_Setup3DSkyModel)(void);
-	void (*R_Finish3DSkyModel)(void);
 	//2d postprocess
 	void (*R_BeginFXAA)(int w, int h);
-	//cloak
-	void (*R_RenderCloakTexture)(void);
-	int (*R_GetCloakTexture)(void);
-	void (*R_BeginRenderConc)(float flBlurFactor, float flRefractFactor);
 	//shader
 	shaderapi_t ShaderAPI;
 	engrefapi_t RefAPI;

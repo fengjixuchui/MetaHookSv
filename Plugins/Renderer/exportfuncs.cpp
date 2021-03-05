@@ -134,16 +134,9 @@ ref_export_t gRefExports =
 	SaveImageGeneric,
 	//capture screen
 	R_GetSCRCaptureBuffer,
-	//3dsky
-	R_Add3DSkyEntity,
-	R_Setup3DSkyModel,
-	R_Finish3DSkyModel,
 	//2d postprocess
 	R_BeginFXAA,
 	//cloak
-	R_RenderCloakTexture,
-	R_GetCloakTexture,
-	R_BeginRenderConc,
 	//shader
 	ShaderAPI,
 	RefAPI
@@ -224,20 +217,53 @@ int HUD_VidInit(void)
 
 void V_CalcRefdef(struct ref_params_s *pparams)
 {
-	R_CalcRefdef(pparams);
-
 	gExportfuncs.V_CalcRefdef(pparams);
+
+	R_CalcRefdef(pparams);
 }
 
 void HUD_DrawNormalTriangles(void)
 {
-	gExportfuncs.HUD_DrawNormalTriangles();
-
 	R_EndRenderGBuffer();
+
+	GL_DisableMultitexture();
 
 	if (!drawreflect && !drawrefract)
 	{
 		R_RenderShadowScenes();
+	}
+
+	if (!r_refdef->onlyClientDraws)
+	{
+		if (s_MSAAFBO.s_hBackBufferFBO)
+		{
+			for (int sampleIndex = 0; sampleIndex < max(1, gl_msaa_samples); sampleIndex++)
+			{
+				if (!R_DoSSAO(sampleIndex))
+				{
+					break;
+				}
+			}
+		}
+		else
+		{
+			R_DoSSAO(-1);
+		}
+	}
+
+	//Allow SCClient to write stencil buffer (but not bit 1)?
+	qglStencilMask(0xFF);
+	qglClear(GL_STENCIL_BUFFER_BIT);
+	gExportfuncs.HUD_DrawNormalTriangles();
+	qglStencilMask(0);
+
+	//Restore current framebuffer just in case that SCClient change it
+	if (s_BackBufferFBO.s_hBackBufferFBO)
+	{
+		if (s_MSAAFBO.s_hBackBufferFBO)
+			qglBindFramebufferEXT(GL_FRAMEBUFFER, s_MSAAFBO.s_hBackBufferFBO);
+		else
+			qglBindFramebufferEXT(GL_FRAMEBUFFER, s_BackBufferFBO.s_hBackBufferFBO);
 	}
 }
 
@@ -326,27 +352,7 @@ int HUD_Redraw(float time, int intermission)
 
 		qglUseProgramObjectARB(0);
 	}
-	else if(r_cloak_debug && r_cloak_debug->value)
-	{
-		qglDisable(GL_BLEND);
-		qglDisable(GL_ALPHA_TEST);
-		qglColor4f(1,1,1,1);
-
-		qglEnable(GL_TEXTURE_2D);
-		qglBindTexture(GL_TEXTURE_2D, cloak_texture);
-
-		qglBegin(GL_QUADS);
-		qglTexCoord2f(0,1);
-		qglVertex3f(0,0,0);
-		qglTexCoord2f(1,1);
-		qglVertex3f(glwidth/2,0,0);
-		qglTexCoord2f(1,0);
-		qglVertex3f(glwidth/2,glheight/2,0);
-		qglTexCoord2f(0,0);
-		qglVertex3f(0,glheight/2,0);
-		qglEnd();
-		qglEnable(GL_ALPHA_TEST);
-	}
+	
 	else if(r_light_debug && r_light_debug->value)
 	{
 		qglDisable(GL_BLEND);
@@ -362,6 +368,8 @@ int HUD_Redraw(float time, int intermission)
 			qglBindTexture(GL_TEXTURE_2D, s_GBufferFBO.s_hBackBufferTex3);
 		else if (r_light_debug->value == 4)
 			qglBindTexture(GL_TEXTURE_2D, s_GBufferFBO.s_hBackBufferTex4);
+		else if (r_light_debug->value == 5)
+			qglBindTexture(GL_TEXTURE_2D, s_GBufferFBO.s_hBackBufferTex5);
 		else
 		{
 			qglUseProgramObjectARB(drawdepth.program);
@@ -414,6 +422,8 @@ int HUD_Redraw(float time, int intermission)
 			pFBO = &s_BrightAccumFBO;break;
 		case 11:
 			pFBO = &s_ToneMapFBO;break;
+		case 12:
+			pFBO = &s_BackBufferFBO; break;
 		default:
 			break;
 		}
@@ -474,6 +484,31 @@ int HUD_Redraw(float time, int intermission)
 		}
 	}
 	return gExportfuncs.HUD_Redraw(time, intermission);
+}
+
+typedef struct portal_texture_s
+{
+	struct portal_texture_s *next;
+	struct portal_texture_s *prev;
+	GLuint gl_texturenum1;
+	GLuint gl_texturenum2;
+}portal_texture_t;
+
+void __fastcall PortalManager_ResetAll(int pthis, int)
+{
+	portal_texture_t *ptextures = *(portal_texture_t **)(pthis + 0x9C);
+
+	if (ptextures->next != ptextures)
+	{
+		do
+		{
+			//qglDeleteTextures(1, &ptextures->gl_texturenum2);
+			ptextures->gl_texturenum2 = 0;
+			ptextures = ptextures->next;
+		} while (ptextures != *(portal_texture_t **)(pthis + 0x9C) );
+	}
+
+	gRefFuncs.PortalManager_ResetAll(pthis, 0);
 }
 
 int HUD_GetStudioModelInterface(int version, struct r_studio_interface_s **ppinterface, struct engine_studio_api_s *pstudio)
@@ -556,14 +591,27 @@ int HUD_GetStudioModelInterface(int version, struct r_studio_interface_s **ppint
 	InstallHook(studioapi_StudioDynamicLight);
 	//InstallHook(studioapi_SetupModel);
 
-	//R_InitDetailTextures();
-	//Load global extra textures into array
-	//R_LoadExtraTextureFile(false);
-	//R_LoadStudioTextures(false);
-
 	cl_sprite_white = IEngineStudio.Mod_ForName("sprites/white.spr", 1);
 
 	cl_shellchrome = IEngineStudio.Mod_ForName("sprites/shellchrome.spr", 1);
+
+	//Fix SvClient Portal Rendering Confliction
+	if (g_iEngineType == ENGINE_SVENGINE)
+	{
+		PUCHAR ClientBase = (PUCHAR)GetModuleHandleA("client.dll");
+		if (ClientBase)
+		{
+			auto ClientSize = g_pMetaHookAPI->GetModuleSize((HMODULE)ClientBase);
+#define SVCLIENT_PORTALMANAGER_RESETALL_SIG "\xC7\x45\x2A\xFF\xFF\xFF\xFF\xA3\x2A\x2A\x2A\x2A\xE8\x2A\x2A\x2A\x2A\x8B\x0D"
+		 DWORD addr = (DWORD)
+				g_pMetaHookAPI->SearchPattern((void *)ClientBase, ClientSize, SVCLIENT_PORTALMANAGER_RESETALL_SIG, sizeof(SVCLIENT_PORTALMANAGER_RESETALL_SIG) - 1);
+			Sig_AddrNotFound("PortalManager_ResetAll");
+
+			gRefFuncs.PortalManager_ResetAll = (decltype(gRefFuncs.PortalManager_ResetAll))GetCallAddress(addr + 12);
+
+			g_pMetaHookAPI->InlineHook(gRefFuncs.PortalManager_ResetAll, PortalManager_ResetAll, (void *&)gRefFuncs.PortalManager_ResetAll);
+		}
+	}
 
 	return gExportfuncs.HUD_GetStudioModelInterface(version, ppinterface, pstudio);
 }

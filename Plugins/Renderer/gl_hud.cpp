@@ -52,6 +52,7 @@ cvar_t *r_ssao_radius = NULL;
 cvar_t *r_ssao_intensity = NULL;
 cvar_t *r_ssao_bias = NULL;
 cvar_t *r_ssao_blur_sharpness = NULL;
+cvar_t *r_ssao_studio_model = NULL;
 
 float *R_GenerateGaussianWeights(int kernelRadius)
 {
@@ -297,7 +298,8 @@ void R_InitGLHUD(void)
 		{
 		}
 
-		depth_linearize_msaa.program = R_CompileShaderFile("resource\\shader\\fullscreenquad.vert.glsl", NULL, "resource\\shader\\depthlinearize.msaa.frag.glsl");
+		depth_linearize_msaa.program = R_CompileShaderFileEx("resource\\shader\\fullscreenquad.vert.glsl", NULL, "resource\\shader\\depthlinearize.frag.glsl",
+			"#define DEPTHLINEARIZE_MSAA 1\n", NULL, "#define DEPTHLINEARIZE_MSAA 1\n");
 		if (depth_linearize_msaa.program)
 		{
 		}
@@ -318,12 +320,14 @@ void R_InitGLHUD(void)
 			SHADER_UNIFORM(hbao_calc_blur, control_NegInvR2, "control_NegInvR2");
 		}
 
-		hbao_blur.program = R_CompileShaderFile("resource\\shader\\fullscreenquad.vert.glsl", NULL, "resource\\shader\\hbao_blur.frag.glsl");
+		hbao_blur.program = R_CompileShaderFileEx("resource\\shader\\fullscreenquad.vert.glsl", NULL, "resource\\shader\\hbao_blur.frag.glsl",
+			"", NULL, "");
 		if (hbao_blur.program)
 		{
 		}
 
-		hbao_blur2.program = R_CompileShaderFile("resource\\shader\\fullscreenquad.vert.glsl", NULL, "resource\\shader\\hbao_blur2.frag.glsl");
+		hbao_blur2.program = R_CompileShaderFileEx("resource\\shader\\fullscreenquad.vert.glsl", NULL, "resource\\shader\\hbao_blur.frag.glsl",
+			"#define AO_BLUR_PRESENT\n", NULL, "#define AO_BLUR_PRESENT\n");
 		if (hbao_blur2.program)
 		{
 
@@ -343,10 +347,10 @@ void R_InitGLHUD(void)
 
 	r_ssao = gEngfuncs.pfnRegisterVariable("r_ssao", "1", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_ssao_debug = gEngfuncs.pfnRegisterVariable("r_ssao_debug", "0",  FCVAR_CLIENTDLL);
-	r_ssao_radius = gEngfuncs.pfnRegisterVariable("r_ssao_radius", "15.0", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
-	r_ssao_intensity = gEngfuncs.pfnRegisterVariable("r_ssao_intensity", "1.0", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
-	r_ssao_bias = gEngfuncs.pfnRegisterVariable("r_ssao_bias", "0.1", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
-	r_ssao_blur_sharpness = gEngfuncs.pfnRegisterVariable("r_ssao_blur_sharpness", "40.0", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+	r_ssao_radius = gEngfuncs.pfnRegisterVariable("r_ssao_radius", "30.0", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+	r_ssao_intensity = gEngfuncs.pfnRegisterVariable("r_ssao_intensity", "0.6", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+	r_ssao_bias = gEngfuncs.pfnRegisterVariable("r_ssao_bias", "0.2", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+	r_ssao_blur_sharpness = gEngfuncs.pfnRegisterVariable("r_ssao_blur_sharpness", "1.0", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 
 	last_luminance = 0;
 
@@ -422,7 +426,7 @@ void R_BlitToScreen(FBO_Container_t *src)
 	qglBindFramebufferEXT(GL_DRAW_FRAMEBUFFER, 0);
 	qglBindFramebufferEXT(GL_READ_FRAMEBUFFER, src->s_hBackBufferFBO);
 
-	qglClearColor(0.0, 1.0, 0.0, 0.25);
+	qglClearColor(0, 0, 0, 0);
 	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	if (bDoDirectBlit)
@@ -440,15 +444,15 @@ void R_BlitToFBO(FBO_Container_t *src, FBO_Container_t *dst)
 	qglBindFramebufferEXT(GL_DRAW_FRAMEBUFFER, dst->s_hBackBufferFBO);
 	qglBindFramebufferEXT(GL_READ_FRAMEBUFFER, src->s_hBackBufferFBO);
 
-	qglClearColor(0.0, 1.0, 0.0, 0.25);
-	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
 	if (bDoDirectBlit)
 	{
 		qglBlitFramebufferEXT(0, 0, src->iWidth, src->iHeight, 0, 0, dst->iWidth, dst->iHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR);
 	}
 	else
 	{
+		qglClearColor(0, 0, 0, 1);
+		qglClear(GL_COLOR_BUFFER_BIT);
+
 		R_DrawHUDQuad_Texture(src->s_hBackBufferTex, dst->iWidth, dst->iHeight);
 	}
 }
@@ -460,7 +464,7 @@ void R_DownSample(FBO_Container_t *src, FBO_Container_t *dst, qboolean filter2x2
 		qglBindFramebufferEXT(GL_FRAMEBUFFER, dst->s_hBackBufferFBO);
 	}
 
-	qglClearColor(0.0, 1.0, 0.0, 0.25);
+	qglClearColor(0, 0, 0, 1);
 	qglClear(GL_COLOR_BUFFER_BIT);
 
 	if(!filter2x2)
@@ -493,7 +497,7 @@ void R_LuminPass(FBO_Container_t *src, FBO_Container_t *dst, int logexp)
 		qglBindFramebufferEXT(GL_FRAMEBUFFER, dst->s_hBackBufferFBO);
 	}
 
-	qglClearColor(0.0, 1.0, 0.0, 0.25);
+	qglClearColor(0, 0, 0, 0);
 	qglClear(GL_COLOR_BUFFER_BIT);
 
 	if(!logexp)
@@ -533,7 +537,7 @@ void R_LuminAdaptation(FBO_Container_t *src, FBO_Container_t *dst, FBO_Container
 		qglBindFramebufferEXT(GL_FRAMEBUFFER, dst->s_hBackBufferFBO);
 	}
 
-	qglClearColor(0.0, 1.0, 0.0, 0.25);
+	qglClearColor(0, 0, 0, 0);
 	qglClear(GL_COLOR_BUFFER_BIT);
 
 	qglUseProgramObjectARB(pp_luminadapt.program);
@@ -567,7 +571,7 @@ void R_BrightPass(FBO_Container_t *src, FBO_Container_t *dst, FBO_Container_t *l
 		qglBindFramebufferEXT(GL_FRAMEBUFFER, dst->s_hBackBufferFBO);
 	}
 
-	qglClearColor(0.0, 1.0, 0.0, 0.25);
+	qglClearColor(0, 0, 0, 0);
 	qglClear(GL_COLOR_BUFFER_BIT);
 
 	qglUseProgramObjectARB(pp_brightpass.program);
@@ -600,7 +604,7 @@ void R_BlurPass(FBO_Container_t *src, FBO_Container_t *dst, qboolean vertical)
 		qglBindFramebufferEXT(GL_FRAMEBUFFER, dst->s_hBackBufferFBO);
 	}
 
-	qglClearColor(0.0, 1.0, 0.0, 0.25);
+	qglClearColor(0, 0, 0, 0);
 	qglClear(GL_COLOR_BUFFER_BIT);
 
 	if(!vertical)
@@ -634,7 +638,7 @@ void R_BrightAccum(FBO_Container_t *blur1, FBO_Container_t *blur2, FBO_Container
 		qglBindFramebufferEXT(GL_FRAMEBUFFER, dst->s_hBackBufferFBO);
 	}
 
-	qglClearColor(0.0, 0.0, 0.0, 0.25);
+	qglClearColor(0, 0, 0, 0);
 	qglClear(GL_COLOR_BUFFER_BIT);
 
 	qglEnable(GL_BLEND);
@@ -666,7 +670,7 @@ void R_ToneMapping(FBO_Container_t *src, FBO_Container_t *dst, FBO_Container_t *
 		qglBindFramebufferEXT(GL_FRAMEBUFFER, dst->s_hBackBufferFBO);
 	}
 
-	qglClearColor(0.0, 1.0, 0.0, 0.25);
+	qglClearColor(0, 0, 0, 0);
 	qglClear(GL_COLOR_BUFFER_BIT);
 
 	qglUseProgramObjectARB(pp_tonemap.program);
@@ -716,11 +720,21 @@ void R_BeginFXAA(int w, int h)
 
 void R_DoHDR(void)
 {
-	if (!bDoHDR || !(r_hdr->value > 0))
+	if (!bDoHDR || !r_hdr->value)
+		return;
+
+	if (drawreflect)
+		return;
+
+	if (drawrefract)
+		return;
+
+	if (g_SvEngine_DrawPortalView)
 		return;
 
 	GL_PushDrawState();
 	GL_PushMatrix();
+
 	R_BeginHUDQuad();
 
 	if (!s_BackBufferFBO.s_hBackBufferFBO)
@@ -770,8 +784,8 @@ void R_DoHDR(void)
 	}
 	else
 	{
-		qglClearColor(0.0, 1.0, 0.0, 0.25);
-		qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		qglClearColor(0, 0, 0, 1);
+		qglClear(GL_COLOR_BUFFER_BIT);
 
 		R_DrawHUDQuad_Texture(s_ToneMapFBO.s_hBackBufferTex, s_ToneMapFBO.iWidth, s_ToneMapFBO.iHeight);
 	}
@@ -821,7 +835,8 @@ int R_DoSSAO(int sampleIndex)
 		qglUseProgramObjectARB(depth_linearize.program);
 		qglUniform4fARB(0, 4 * r_params.movevars->zmax, 4 - r_params.movevars->zmax, r_params.movevars->zmax, 1.0f);
 
-		R_DrawHUDQuad_Texture(s_BackBufferFBO.s_hBackBufferDepthTex, glwidth, glheight);
+		GL_Bind(s_BackBufferFBO.s_hBackBufferDepthTex);
+		R_DrawHUDQuad(glwidth, glheight);
 	}
 
 	qglUseProgramObjectARB(0);
@@ -915,14 +930,14 @@ int R_DoSSAO(int sampleIndex)
 
 	GL_DisableMultitexture();
 	GL_Bind(s_HBAOCalcFBO.s_hBackBufferTex);
-	GL_EnableMultitexture();
-	GL_Bind(s_DepthLinearFBO.s_hBackBufferTex);
+	//GL_EnableMultitexture();
+	//GL_Bind(s_DepthLinearFBO.s_hBackBufferTex);
 
 	R_DrawHUDQuad(glwidth, glheight);
 
 	qglUseProgramObjectARB(0);
 
-	GL_DisableMultitexture();
+	//GL_DisableMultitexture();
 
 	//Final output stage, write to main FBO or MSAA FBO.
 	if (s_MSAAFBO.s_hBackBufferFBO)
@@ -943,6 +958,12 @@ int R_DoSSAO(int sampleIndex)
 		qglSampleMaski(0, 1 << sampleIndex);
 	}
 
+	//Stencil for studio model?
+	qglEnable(GL_STENCIL_TEST);
+	qglStencilMask(0xFF);
+	qglStencilFunc(GL_EQUAL, 0, 0xFF);
+	qglStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+
 	qglUseProgramObjectARB(hbao_blur2.program);
 	qglUniform1fARB(0, r_ssao_blur_sharpness->value / meters2viewspace);
 	qglUniform2fARB(1, 0, 1.0f / float(glheight));
@@ -951,6 +972,9 @@ int R_DoSSAO(int sampleIndex)
 	R_DrawHUDQuad(glwidth, glheight);
 
 	qglUseProgramObjectARB(0);
+
+	qglStencilMask(0);
+	qglDisable(GL_STENCIL_TEST);
 
 	qglDisable(GL_SAMPLE_MASK);
 	qglSampleMaski(0, ~0);
@@ -968,6 +992,15 @@ void R_DoFXAA(void)
 		return;
 
 	if (!pp_fxaa.program)
+		return;
+
+	if (drawreflect)
+		return;
+
+	if (drawrefract)
+		return;
+
+	if (g_SvEngine_DrawPortalView)
 		return;
 
 	GL_PushDrawState();

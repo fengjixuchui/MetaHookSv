@@ -10,6 +10,7 @@ cvar_t *r_wsurf_replace;
 cvar_t *r_wsurf_vbo;
 
 int r_wsurf_drawcall = 0;
+int r_wsurf_polys = 0;
 
 std::unordered_map<int, wsurf_program_t> g_WSurfProgramTable;
 
@@ -344,7 +345,6 @@ void R_GenerateVertexBuffer(void)
 
 			if (i == *skytexturenum)
 			{
-				//R_DrawSkyChain(s);
 				continue;
 			}
 			else
@@ -405,6 +405,7 @@ void R_GenerateVertexBuffer(void)
 	qglBindBufferARB(GL_ELEMENT_ARRAY_BUFFER_ARB, 0);
 
 	r_wsurf.iLightmapTextureArray = GL_GenTexture();
+	qglEnable(GL_TEXTURE_2D_ARRAY);
 	qglBindTexture(GL_TEXTURE_2D_ARRAY, r_wsurf.iLightmapTextureArray);
 	qglTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	qglTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -414,8 +415,7 @@ void R_GenerateVertexBuffer(void)
 		qglTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, BLOCK_WIDTH, BLOCK_HEIGHT, 1, GL_RGBA, GL_UNSIGNED_BYTE, lightmaps + 0x10000 * i);
 	}
 	qglBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-
-	auto err = qglGetError();
+	qglDisable(GL_TEXTURE_2D_ARRAY);
 }
 
 void R_SetVBOState(int state)
@@ -862,7 +862,7 @@ void DrawGLScrollingVertex(brushface_t *brushface, float sOffset)
 	}
 	qglEnd();
 
-	(*c_brush_polys)++;
+	r_wsurf_polys ++;
 	r_wsurf_drawcall ++;
 }
 
@@ -921,9 +921,8 @@ void R_DrawDecals(qboolean bMultitexture)
 	R_SetGBufferMask(GBUFFER_MASK_DIFFUSE);
 	gRefFuncs.R_DrawDecals(1);
 
-	(*c_brush_polys)++;
-
-	r_wsurf_drawcall++;
+	r_wsurf_polys ++;
+	r_wsurf_drawcall ++;
 
 	//Restore if not enabled
 	if (!bMultitexture)
@@ -941,16 +940,8 @@ void R_DrawSequentialPoly(msurface_t *s, int face)
 
 		qglDisable(GL_TEXTURE_2D);
 
-		if ((*r_blend) < 1)
-		{
-			R_UseGBufferProgram(GBUFFER_TRANSPARENT_ENABLED);
-			R_SetGBufferMask(GBUFFER_MASK_DIFFUSE);
-		}
-		else
-		{
-			R_UseGBufferProgram(0);
-			R_SetGBufferMask(GBUFFER_MASK_ALL);
-		}
+		R_UseGBufferProgram(0);
+		R_SetGBufferMask(GBUFFER_MASK_ALL);
 
 		DrawGLPolySolid(s);
 
@@ -1263,7 +1254,6 @@ char *R_ParseBSPEntity(char *data)
 			if (!data)
 			{
 				Sys_ErrorEx("R_ParseBSPEntity: EOF without closing brace");
-
 			}
 			if (com_token[0] == '}')
 			{
@@ -1276,6 +1266,22 @@ char *R_ParseBSPEntity(char *data)
 			}
 
 			R_ParseBSPEntityKeyValue(classname, keyname, com_token);
+		}
+	}
+	else
+	{
+		gEngfuncs.Con_Printf("R_ParseBSPEntity: missing classname, try next section.");
+		while (1)
+		{
+			data = gEngfuncs.COM_ParseFile(data, com_token);
+			if (!data)
+			{
+				break;
+			}
+			if (com_token[0] == '}')
+			{
+				break;
+			}
 		}
 	}
 
@@ -1360,29 +1366,6 @@ void R_LoadBSPEntities(void)
 					r_light_env_angles_exists = true;
 				}
 			}
-		}
-
-		if(!strcmp(classname, "sky_box"))
-		{
-			char *model = ValueForKey(ent, "model");
-			if (model && model[0] == '*')
-			{
-				model_t *mod = IEngineStudio.Mod_ForName(model, false);
-				if(mod)
-				{
-					VectorCopy(mod->mins, r_3dsky_parm.mins);
-					VectorCopy(mod->maxs, r_3dsky_parm.maxs);
-				}
-			}
-		}
-		if(!strcmp(classname, "sky_center"))
-		{
-			VectorCopy(ent->origin, r_3dsky_parm.center);
-		}
-		if(!strcmp(classname, "sky_camera"))
-		{
-			VectorCopy(ent->origin, r_3dsky_parm.camera);
-			r_3dsky_parm.enable = true;
 		}
 	}//end for
 }
@@ -1575,6 +1558,11 @@ void R_DrawWorld(void)
 
 	qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 
+	qglEnable(GL_STENCIL_TEST);
+	qglStencilMask(0xFF);
+	qglStencilFunc(GL_ALWAYS, 0, 0xFF);
+	qglStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+
 	if (r_wsurf_vbo->value)
 	{
 		GL_DisableMultitexture();
@@ -1631,8 +1619,7 @@ void R_DrawWorld(void)
 			R_EndDetailTexture();
 
 			r_wsurf_drawcall++;
-
-			(*c_brush_polys) += texchain.iFaceCount;
+			r_wsurf_polys += texchain.iFaceCount;
 		}
 
 		//Use scrolling shader
@@ -1684,7 +1671,7 @@ void R_DrawWorld(void)
 			R_EndDetailTexture();
 
 			r_wsurf_drawcall++;
-			(*c_brush_polys) += texchain.iFaceCount;
+			r_wsurf_polys += texchain.iFaceCount;
 		}
 
 		qglUseProgramObjectARB(0);
@@ -1734,4 +1721,7 @@ void R_DrawWorld(void)
 		qglDisable(GL_POLYGON_OFFSET_FILL);
 		(*r_polygon_offset) = 0.0;
 	}
+
+	qglStencilMask(0);
+	qglDisable(GL_STENCIL_TEST);
 }

@@ -20,7 +20,12 @@ uniform vec4 lightpos;
 #ifdef FINAL_PASS
 uniform sampler2D diffuseTex;
 uniform sampler2D lightmapTex;
+uniform sampler2D additiveTex;
+
+#ifndef DIRECT_BLIT
 uniform sampler2D depthTex;
+#endif
+
 #endif
 
 #ifdef LIGHT_PASS
@@ -79,6 +84,7 @@ void main()
     vec4 normalColor = texture2D(normalTex, gl_TexCoord[0].xy);
 
     vec3 worldpos = positionColor.xyz;
+    //worldpos *= 1024.0;
     vec3 normal = normalColor.xyz;
     
 #ifdef LIGHT_PASS_SPOT
@@ -96,11 +102,16 @@ void main()
 {
     vec4 diffuseColor = texture2D(diffuseTex, gl_TexCoord[0].xy);
     vec4 lightmapColor = texture2D(lightmapTex, gl_TexCoord[0].xy);
-    vec4 depthColor = texture2D(depthTex, gl_TexCoord[0].xy);
+    vec4 additiveColor = texture2D(additiveTex, gl_TexCoord[0].xy);
     
-    vec4 finalColor = diffuseColor * lightmapColor;
+    vec4 finalColor = diffuseColor * lightmapColor + additiveColor;
 
     gl_FragColor = finalColor;
+
+#ifndef DIRECT_BLIT
+    vec4 depthColor = texture2D(depthTex, gl_TexCoord[0].xy);
+
     gl_FragDepth = depthColor.x;
+#endif
 }
 #endif

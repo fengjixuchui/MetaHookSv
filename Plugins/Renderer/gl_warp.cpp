@@ -27,7 +27,6 @@ void EmitWaterPolysWireFrame(msurface_t *fa, int direction, qboolean useProgram)
 		R_UseGBufferProgram(GBUFFER_TRANSPARENT_ENABLED);
 		R_SetGBufferMask(GBUFFER_MASK_DIFFUSE);
 
-
 		if (fa->polys->verts[0][2] >= r_refdef->vieworg[2])
 			scale = (*currententity)->curstate.scale;
 		else
@@ -86,7 +85,7 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 	float scale;
 	float tempVert[3];
 	unsigned char *pSourcePalette;
-	qboolean useProgram = false, dontShader = false;
+	int useProgram = 0, dontShader = false;
 
 	if (drawreflect)
 		return;
@@ -135,6 +134,11 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 		VectorAdd(tempVert, (*currententity)->curstate.origin, tempVert);
 	}
 	
+	qglEnable(GL_STENCIL_TEST);
+	qglStencilMask(0xFF);
+	qglStencilFunc(GL_ALWAYS, 1, 0xFF);
+	qglStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+
 	R_SetVBOState(VBOSTATE_OFF);
 
 	R_UseGBufferProgram(GBUFFER_DIFFUSE_ENABLED);
@@ -166,8 +170,11 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 			if (!bAboveWater)
 				programState |= WATER_UNDERWATER_ENABLED;
 
-			if(drawgbuffer)
+			if (drawgbuffer)
 				programState |= WATER_GBUFFER_ENABLED;
+
+			if (bAboveWater && alpha < 1)
+				programState |= WATER_DEPTH_ENABLED;
 
 			water_program_t prog = { 0 };
 			R_UseWaterProgram(programState, &prog);
@@ -178,6 +185,8 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 					qglUniform4fARB(prog.waterfogcolor, waterObject->color.r / 255.0f, waterObject->color.g / 255.0f, waterObject->color.b / 255.0f, alpha);
 				if (prog.eyepos != -1)
 					qglUniform4fARB(prog.eyepos, r_refdef->vieworg[0], r_refdef->vieworg[1], r_refdef->vieworg[2], 1.0);
+				if (prog.clipinfo != -1)
+					qglUniform2fARB(prog.clipinfo, 4.0, r_params.movevars->zmax);
 				if (prog.time != -1)
 					qglUniform1fARB(prog.time, clientTime);
 				if (prog.fresnel != -1)
@@ -186,33 +195,39 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 					qglUniform1fARB(prog.depthfactor, clamp(r_water_depthfactor->value, 0.0, 1000.0));
 				if (prog.normfactor != -1)
 					qglUniform1fARB(prog.normfactor, clamp(r_water_normfactor->value, 0.0, 1000.0));
+
+				qglEnable(GL_BLEND);
+				qglBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+				GL_SelectTexture(TEXTURE0_SGIS);
+				GL_Bind(water_normalmap);
+
+				GL_EnableMultitexture();
+				GL_Bind(waterObject->refractmap);
+
+				if (prog.reflectmap != -1)
+				{
+					qglActiveTextureARB(TEXTURE2_SGIS);
+					qglEnable(GL_TEXTURE_2D);
+					qglBindTexture(GL_TEXTURE_2D, waterObject->reflectmap);
+				}
+
+				if (prog.depthrefrmap != -1)
+				{
+					qglActiveTextureARB(TEXTURE3_SGIS);
+					qglEnable(GL_TEXTURE_2D);
+					qglBindTexture(GL_TEXTURE_2D, waterObject->depthrefrmap);
+				}
+
+				useProgram = 1;
 			}
-
-			qglEnable(GL_BLEND);
-			qglBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-			GL_SelectTexture(TEXTURE0_SGIS);
-			GL_Bind(water_normalmap);
-
-			GL_EnableMultitexture();
-			GL_Bind(waterObject->refractmap);
-
-			qglActiveTextureARB(TEXTURE2_SGIS);
-			qglEnable(GL_TEXTURE_2D);
-			qglBindTexture(GL_TEXTURE_2D, waterObject->reflectmap);
-
-			qglActiveTextureARB(TEXTURE3_SGIS);
-			qglEnable(GL_TEXTURE_2D);
-			qglBindTexture(GL_TEXTURE_2D, waterObject->depthrefrmap);
-
-			useProgram = true;
 		}
 	}
 
 	if (fa->polys->verts[0][2] >= r_refdef->vieworg[2])
-		scale = (*currententity)->curstate.scale;
-	else
 		scale = -(*currententity)->curstate.scale;
+	else
+		scale = (*currententity)->curstate.scale;
 
 	if (drawrefract)
 		scale = 0;
@@ -279,7 +294,7 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 		qglEnd();
 
 		r_wsurf_drawcall++;
-		(*c_brush_polys) ++;
+		r_wsurf_polys++;
 	}
 
 	if(useProgram)
@@ -298,6 +313,9 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 
 		qglUseProgramObjectARB(0);
 	}
+
+	qglStencilMask(0);
+	qglDisable(GL_STENCIL_TEST);
 
 	EmitWaterPolysWireFrame(fa, direction, useProgram);
 }
@@ -551,7 +569,15 @@ void R_DrawSkyChain(msurface_t *s)
 	R_UseGBufferProgram(GBUFFER_DIFFUSE_ENABLED);
 	R_SetGBufferMask(GBUFFER_MASK_ALL);
 
+	qglEnable(GL_STENCIL_TEST);
+	qglStencilMask(0xFF);
+	qglStencilFunc(GL_ALWAYS, 1, 0xFF);
+	qglStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+
 	R_DrawSkyBox();
+
+	qglStencilMask(0);
+	qglDisable(GL_STENCIL_TEST);
 }
 
 void R_ClearSkyBox(void)
@@ -617,22 +643,13 @@ void R_DrawSkyBox(void)
 {
 	int i, order;
 
-	/*float vNormalTable[6][3] = { 
+	float vNormalTable[6][3] = { 
 		{-1, 0, 0},
 		{1, 0, 0},
 		{0, -1, 0},
 		{0, 1, 0},
 		{0, 0, -1},
 		{0, 0, 1}
-	};*/
-
-	float vNormalTable[6][3] = {
-		{0, 0, 0},
-		{0, 0, 0},
-		{0, 0, 0},
-		{0, 0, 0},
-		{0, 0, 0},
-		{0, 0, 0}
 	};
 
 	for (i = 0; i < 6; i++)
@@ -649,14 +666,7 @@ void R_DrawSkyBox(void)
 			order = skytexorder[i];
 		}
 
-		/*if(r_wsurf_sky->value > 0 && r_wsurf.iSkyTextures[order])
-		{
-			GL_Bind(r_wsurf.iSkyTextures[order]);
-		}
-		else
-		{*/
-			GL_Bind(gSkyTexNumber[order]);
-		//}
+		GL_Bind(gSkyTexNumber[order]);
 
 		qglBegin(GL_QUADS);
 		qglNormal3fv(vNormalTable[i]);

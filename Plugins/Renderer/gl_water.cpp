@@ -50,6 +50,9 @@ void R_UseWaterProgram(int state, water_program_t *progOutput)
 		if (state & WATER_GBUFFER_ENABLED)
 			defs << "#define GBUFFER_ENABLED\n";
 
+		if (state & WATER_DEPTH_ENABLED)
+			defs << "#define DEPTH_ENABLED\n";
+
 		auto def = defs.str();
 
 		prog.program = R_CompileShaderFileEx("resource\\shader\\water_shader.vsh", NULL, "resource\\shader\\water_shader.fsh", def.c_str(), NULL, def.c_str());
@@ -58,7 +61,7 @@ void R_UseWaterProgram(int state, water_program_t *progOutput)
 			SHADER_UNIFORM(prog, waterfogcolor, "waterfogcolor");
 			SHADER_UNIFORM(prog, eyepos, "eyepos");
 			SHADER_UNIFORM(prog, entitymatrix, "entitymatrix");
-			SHADER_UNIFORM(prog, zmax, "zmax");
+			SHADER_UNIFORM(prog, clipinfo, "clipinfo");
 			SHADER_UNIFORM(prog, time, "time");
 			SHADER_UNIFORM(prog, fresnel, "fresnel");
 			SHADER_UNIFORM(prog, depthfactor, "depthfactor");
@@ -179,7 +182,7 @@ void R_InitWater(void)
 	r_water_fresnel = gEngfuncs.pfnRegisterVariable("r_water_fresnel", "1.5", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_water_depthfactor = gEngfuncs.pfnRegisterVariable("r_water_depthfactor", "50", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_water_normfactor = gEngfuncs.pfnRegisterVariable("r_water_normfactor", "1.5", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
-	r_water_novis = gEngfuncs.pfnRegisterVariable("r_water_novis", "1", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+	r_water_novis = gEngfuncs.pfnRegisterVariable("r_water_novis", "0", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_water_texscale = gEngfuncs.pfnRegisterVariable("r_water_texscale", "0.5", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_water_minheight = gEngfuncs.pfnRegisterVariable("r_water_minheight", "7.5", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 
@@ -293,7 +296,6 @@ r_water_t *R_GetActiveWater(cl_entity_t *ent, vec3_t p, colorVec *color)
 	w->org[1] = (ent->curstate.mins[1] + ent->curstate.maxs[1]) / 2;
 	w->org[2] = (ent->curstate.mins[2] + ent->curstate.maxs[2]) / 2;
 	memcpy(&w->color, color, sizeof(*color));
-	w->is3dsky = (draw3dsky) ? true : false;
 	w->free = false;
 	w->framecount = (*r_framecount);
 	return w;
@@ -347,18 +349,15 @@ void R_RenderReflectView(void)
 	}
 
 	qglClearColor(curwater->color.r / 255.0f, curwater->color.g / 255.0f, curwater->color.b / 255.0f, 1);
-	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	qglStencilMask(0xFF);
+	qglClearStencil(0);
+	qglDepthMask(GL_TRUE);
+	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	qglStencilMask(0);
 
 	R_PushRefDef();
 
-	if(curwater->is3dsky)
-	{
-		VectorCopy(_3dsky_view, water_view);
-	}
-	else
-	{
-		VectorCopy(r_refdef->vieworg, water_view);
-	}
+	VectorCopy(r_refdef->vieworg, water_view);
 
 	VectorCopy(water_view, r_refdef->vieworg);
 
@@ -411,18 +410,15 @@ void R_RenderRefractView(void)
 	}
 
 	qglClearColor(curwater->color.r / 255.0f, curwater->color.g / 255.0f, curwater->color.b / 255.0f, 1);
-	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	qglStencilMask(0xFF);
+	qglClearStencil(0);
+	qglDepthMask(GL_TRUE);
+	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	qglStencilMask(0);
 
 	R_PushRefDef();
 
-	if(curwater->is3dsky)
-	{
-		VectorCopy(_3dsky_view, water_view);
-	}
-	else
-	{
-		VectorCopy(r_refdef->vieworg, water_view);
-	}
+	VectorCopy(r_refdef->vieworg, water_view);
 
 	VectorCopy(water_view, r_refdef->vieworg);
 

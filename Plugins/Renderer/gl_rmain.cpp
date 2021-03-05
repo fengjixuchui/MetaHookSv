@@ -8,9 +8,6 @@ refdef_t *r_refdef;
 
 ref_params_t r_params;
 
-int saved_c_alias_polys;
-int saved_c_brush_polys;
-
 float gldepthmin, gldepthmax;
 
 cl_entity_t *r_worldentity;
@@ -61,6 +58,13 @@ int *cl_parsecount;
 int *cl_waterlevel;
 double *cl_time;
 double *cl_oldtime;
+int *envmap;
+int *cl_stats;
+float *cl_weaponstarttime;
+int *cl_weaponsequence;
+int *cl_light_level;
+int *c_alias_polys;
+int *c_brush_polys;
 
 qboolean gl_framebuffer_object = false;
 qboolean gl_shader_support = false;
@@ -80,6 +84,7 @@ int *gl_msaa_fbo = 0;
 int *gl_backbuffer_fbo = 0;
 int *gl_mtexable = 0;
 qboolean *mtexenabled = 0;
+qboolean g_SvEngine_DrawPortalView = 0;
 
 float r_identity_matrix[16] = {
 	1.0f, 0.0f, 0.0f, 0.0f,
@@ -107,7 +112,7 @@ FBO_Container_t s_BrightAccumFBO;
 FBO_Container_t s_ToneMapFBO;
 FBO_Container_t s_DepthLinearFBO;
 FBO_Container_t s_HBAOCalcFBO;
-FBO_Container_t s_CloakFBO;
+//FBO_Container_t s_CloakFBO;
 FBO_Container_t s_ShadowFBO;
 FBO_Container_t s_WaterFBO;
 
@@ -144,6 +149,7 @@ cvar_t *gl_vsync = NULL;
 cvar_t *gl_ztrick = NULL;
 cvar_t *gl_finish = NULL;
 cvar_t *gl_clear = NULL;
+cvar_t *gl_clearcolor = NULL;
 cvar_t *gl_cull = NULL;
 cvar_t *gl_texsort = NULL;
 cvar_t *gl_smoothmodels = NULL;
@@ -181,6 +187,7 @@ cvar_t *v_gamma = NULL;
 cvar_t *v_lambert = NULL;
 
 cvar_t *cl_righthand = NULL;
+cvar_t *chase_active = NULL;
 
 int R_GetDrawPass(void)
 {
@@ -188,15 +195,11 @@ int R_GetDrawPass(void)
 		return r_draw_reflect;
 	if(drawrefract)
 		return r_draw_refract;
-	if(draw3dsky)
-		return r_draw_3dsky;
 	return r_draw_normal;
 }
 
 qboolean R_CullBox(vec3_t mins, vec3_t maxs)
 {
-	if(draw3dsky)
-		return false;
 
 	return gRefFuncs.R_CullBox(mins, maxs);
 }
@@ -266,17 +269,8 @@ void R_RotateForEntity(vec_t *origin, cl_entity_t *e)
 
 void R_DrawSpriteModel(cl_entity_t *entity)
 {
-	//only non-transparent sprite goes handled by gbuffer
-	if ((*r_blend) < 1.0f)
-	{
-		R_UseGBufferProgram(GBUFFER_DIFFUSE_ENABLED | GBUFFER_TRANSPARENT_ENABLED);
-		R_SetGBufferMask(GBUFFER_MASK_DIFFUSE);
-	}
-	else
-	{
-		R_UseGBufferProgram(GBUFFER_DIFFUSE_ENABLED);
-		R_SetGBufferMask(GBUFFER_MASK_ALL);
-	}
+	R_UseGBufferProgram(GBUFFER_DIFFUSE_ENABLED | GBUFFER_TRANSPARENT_ENABLED);
+	R_SetGBufferMask(GBUFFER_MASK_ALL);
 
 	gRefFuncs.R_DrawSpriteModel(entity);
 }
@@ -336,8 +330,9 @@ void R_Clear(void)
 {
 	if (r_mirroralpha && r_mirroralpha->value != 1.0)
 	{
+		qglDepthMask(GL_TRUE);
 		if (gl_clear->value)
-			qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+			qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 		else
 			qglClear(GL_DEPTH_BUFFER_BIT);
 
@@ -350,7 +345,7 @@ void R_Clear(void)
 		static int trickframe;
 
 		if (gl_clear->value)
-			qglClear(GL_COLOR_BUFFER_BIT);
+			qglClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
 		trickframe++;
 
@@ -369,8 +364,9 @@ void R_Clear(void)
 	}
 	else
 	{
+		qglDepthMask(GL_TRUE);
 		if (gl_clear->value)
-			qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+			qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 		else
 			qglClear(GL_DEPTH_BUFFER_BIT);
 
@@ -715,21 +711,142 @@ void R_DrawTEntitiesOnList(int onlyClientDraw)
 
 void R_DrawBrushModel(cl_entity_t *entity)
 {
+	qglEnable(GL_STENCIL_TEST);
+	qglStencilMask(0xFF);
+	qglStencilFunc(GL_ALWAYS, 0, 0xFF);
+	qglStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+
 	gRefFuncs.R_DrawBrushModel(entity);
+
+	qglStencilMask(0);
+	qglEnable(GL_STENCIL_TEST);
 
 	r_rotate_entity = false;
 }
 
 void R_DrawViewModel(void)
 {
-}
+	float lightvec[3];
+	colorVec c;
+	float ambient[4], diffuse[4];
+	int j;
+	int lnum;
+	vec3_t dist;
+	float add, oldShadows;
+	dlight_t *dl;
+	int ambientlight, shadelight;
 
-void R_PreDrawViewModel(void)
-{
+	lightvec[0] = -1;
+	lightvec[1] = 0;
+	lightvec[2] = 0;
+
+	(*currententity) = cl_viewent;
+
+	if (!r_drawviewmodel->value)
+	{
+		c = R_LightPoint((*currententity)->origin);
+		(*cl_light_level) = (c.r + c.g + c.b) / 3;
+		return;
+	}
+
+	if (gExportfuncs.CL_IsThirdPerson())
+	{
+		c = R_LightPoint((*currententity)->origin);
+		(*cl_light_level) = (c.r + c.g + c.b) / 3;
+		return;
+	}
+
+	if (chase_active->value)
+	{
+		c = R_LightPoint((*currententity)->origin);
+		(*cl_light_level) = (c.r + c.g + c.b) / 3;
+		return;
+	}
+
+	if ((*envmap))
+	{
+		c = R_LightPoint((*currententity)->origin);
+		(*cl_light_level) = (c.r + c.g + c.b) / 3;
+		return;
+	}
+
+	if (!r_drawentities->value)
+	{
+		c = R_LightPoint((*currententity)->origin);
+		(*cl_light_level) = (c.r + c.g + c.b) / 3;
+		return;
+	}
+
+	if (cl_stats[0] <= 0)
+	{
+		c = R_LightPoint((*currententity)->origin);
+		(*cl_light_level) = (c.r + c.g + c.b) / 3;
+		return;
+	}
+
+	if (!(*currententity)->model)
+	{
+		c = R_LightPoint((*currententity)->origin);
+		(*cl_light_level) = (c.r + c.g + c.b) / 3;
+		return;
+	}
+
+	if (r_params.viewentity > r_params.maxclients)
+	{
+		c = R_LightPoint((*currententity)->origin);
+		(*cl_light_level) = (c.r + c.g + c.b) / 3;
+		return;
+	}
+
+	qglDepthRange(0, 0.3f);
+
+	switch ((*currententity)->model->type)
+	{
+	case mod_studio:
+	{
+		if (!(*cl_weaponstarttime))
+			(*cl_weaponstarttime) = (*cl_time);
+
+		int playernum = r_params.playernum;
+
+		hud_player_info_t hudPlayerInfo;
+		gEngfuncs.pfnGetPlayerInfo(r_params.playernum, &hudPlayerInfo);
+
+		(*currententity)->curstate.frame = 0;
+		(*currententity)->curstate.framerate = 1;
+		(*currententity)->curstate.sequence = (*cl_weaponsequence);
+		(*currententity)->curstate.animtime = (*cl_weaponstarttime);
+		(*currententity)->curstate.colormap = ((hudPlayerInfo.topcolor) % 0xFFFF) | ((hudPlayerInfo.bottomcolor << 8) % 0xFFFF);
+
+		c = R_LightPoint((*currententity)->origin);
+
+		oldShadows = r_shadows->value;
+		r_shadows->value = 0;
+		(*cl_light_level) = (c.r + c.g + c.b) / 3;
+		(*gpStudioInterface)->StudioDrawModel(STUDIO_RENDER);
+		r_shadows->value = oldShadows;
+		break;
+	}
+
+	case mod_brush:
+	{
+		R_DrawBrushModel((*currententity));
+		break;
+	}
+	}
+
+	qglDepthRange(0, 1);
+	qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 }
 
 void R_PolyBlend(void)
 {
+	gRefFuncs.R_PolyBlend();
+}
+
+void S_ExtraUpdate(void)
+{
+	gRefFuncs.S_ExtraUpdate();
 }
 
 float CalcFov(float fov_x, float width, float height)
@@ -862,6 +979,7 @@ void GL_ClearFBO(FBO_Container_t *s)
 	s->s_hBackBufferTex2 = 0;
 	s->s_hBackBufferTex3 = 0;
 	s->s_hBackBufferTex4 = 0;
+	s->s_hBackBufferTex5 = 0;
 	s->s_hBackBufferDepthTex = 0;
 	s->iWidth = s->iHeight = s->iTextureColorFormat = 0;
 }
@@ -889,6 +1007,9 @@ void GL_FreeFBO(FBO_Container_t *s)
 	if (s->s_hBackBufferTex4)
 		qglDeleteTextures(1, &s->s_hBackBufferTex4);
 
+	if (s->s_hBackBufferTex5)
+		qglDeleteTextures(1, &s->s_hBackBufferTex5);
+
 	if (s->s_hBackBufferDepthTex)
 		qglDeleteTextures(1, &s->s_hBackBufferDepthTex);
 
@@ -901,34 +1022,37 @@ void R_GLGenFrameBuffer(FBO_Container_t *s)
 	qglBindFramebufferEXT(GL_FRAMEBUFFER, s->s_hBackBufferFBO);
 }
 
-void R_GLGenRenderBuffer(FBO_Container_t *s, qboolean depth)
+void R_GLGenRenderBuffer(FBO_Container_t *s, int type)
 {
-	if(!depth)
-	{
-		qglGenRenderbuffersEXT(1, &s->s_hBackBufferCB);
-		qglBindRenderbufferEXT(GL_RENDERBUFFER, s->s_hBackBufferCB);
-	}
-	else
+	if(type == 1)
 	{
 		qglGenRenderbuffersEXT(1, &s->s_hBackBufferDB);
 		qglBindRenderbufferEXT(GL_RENDERBUFFER, s->s_hBackBufferDB);
 	}
+	else
+	{
+		qglGenRenderbuffersEXT(1, &s->s_hBackBufferCB);
+		qglBindRenderbufferEXT(GL_RENDERBUFFER, s->s_hBackBufferCB);
+	}
 }
 
-void R_GLRenderBufferStorage(FBO_Container_t *s, qboolean depth, GLuint iInternalFormat, qboolean multisample)
+void R_GLRenderBufferStorage(FBO_Container_t *s, int type, GLuint iInternalFormat, qboolean multisample)
 {
 	if(multisample)
 	{
-		/*if(gl_csaa_support)
-			qglRenderbufferStorageMultisampleCoverageNV(GL_RENDERBUFFER, gl_csaa_samples, gl_msaa_samples, iInternalFormat, s->iWidth, s->iHeight);
-		else
-			*/qglRenderbufferStorageMultisampleEXT(GL_RENDERBUFFER, gl_msaa_samples, iInternalFormat, s->iWidth, s->iHeight);
+		qglRenderbufferStorageMultisampleEXT(GL_RENDERBUFFER, gl_msaa_samples, iInternalFormat, s->iWidth, s->iHeight);
 	}
 	else
 	{
 		qglRenderbufferStorageEXT(GL_RENDERBUFFER, iInternalFormat, s->iWidth, s->iHeight);
 	}
-	qglFramebufferRenderbufferEXT(GL_FRAMEBUFFER, (depth) ? GL_DEPTH_ATTACHMENT : GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, (depth) ? s->s_hBackBufferDB : s->s_hBackBufferCB);
+
+	if (type == 2)
+		qglFramebufferRenderbufferEXT(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, s->s_hBackBufferDB);
+	else if(type == 1)
+		qglFramebufferRenderbufferEXT(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, s->s_hBackBufferDB);
+	else if	(type == 0)
+		qglFramebufferRenderbufferEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, s->s_hBackBufferCB);
 }
 
 void R_GLFrameBufferColorTexture(FBO_Container_t *s, GLuint iInternalFormat, qboolean multisample)
@@ -949,10 +1073,14 @@ void R_GLFrameBufferColorTexture(FBO_Container_t *s, GLuint iInternalFormat, qbo
 	else
 	{
 		if (iInternalFormat == GL_R32F)
+		{
 			qglTexStorage2D(tex2D, 1, iInternalFormat, s->iWidth, s->iHeight);
+		}
 		else
+		{
 			qglTexImage2D(tex2D, 0, iInternalFormat, s->iWidth, s->iHeight, 0, GL_RGBA,
-			(iInternalFormat != GL_RGBA && iInternalFormat != GL_RGBA8) ? GL_FLOAT : GL_UNSIGNED_BYTE, 0);
+				(iInternalFormat != GL_RGBA && iInternalFormat != GL_RGBA8) ? GL_FLOAT : GL_UNSIGNED_BYTE, 0);
+		}
 	}
 	s->iTextureColorFormat = iInternalFormat;
 
@@ -976,27 +1104,28 @@ void R_GLFrameBufferDepthTexture(FBO_Container_t *s, GLuint iInternalFormat, qbo
 	}
 	else
 	{
-		qglTexImage2D(tex2D, 0, iInternalFormat, s->iWidth, s->iHeight, 0, GL_DEPTH_COMPONENT,
-			(iInternalFormat != GL_RGBA && iInternalFormat != GL_RGBA8) ? GL_FLOAT : GL_UNSIGNED_BYTE, 0);
+		if (iInternalFormat == GL_DEPTH24_STENCIL8 || iInternalFormat == GL_DEPTH24_STENCIL8_EXT)
+		{
+			qglTexImage2D(tex2D, 0, iInternalFormat, s->iWidth, s->iHeight, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, 0);
+		}
+		else
+		{
+			if(iInternalFormat == GL_RGBA || iInternalFormat == GL_RGBA8)
+				qglTexImage2D(tex2D, 0, iInternalFormat, s->iWidth, s->iHeight, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, 0);
+			else
+				qglTexImage2D(tex2D, 0, iInternalFormat, s->iWidth, s->iHeight, 0, GL_DEPTH_COMPONENT, GL_FLOAT, 0);
+		}
 	}
 
-	qglFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, s->s_hBackBufferDepthTex, 0);
-	qglBindTexture(tex2D, 0);
-}
+	if (iInternalFormat == GL_DEPTH24_STENCIL8 || iInternalFormat == GL_DEPTH24_STENCIL8_EXT)
+	{
+		qglFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, s->s_hBackBufferDepthTex, 0);
+	}
+	else
+	{
+		qglFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, s->s_hBackBufferDepthTex, 0);
+	}
 
-void R_GLFrameBufferDepthStencilTexture(FBO_Container_t *s, qboolean multisample)
-{
-	int tex2D = multisample ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D;
-
-	s->s_hBackBufferDepthTex = GL_GenTexture();
-	qglBindTexture(tex2D, s->s_hBackBufferDepthTex);
-	qglTexParameteri(tex2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	qglTexParameteri(tex2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	qglTexParameteri(tex2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	qglTexParameteri(tex2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	qglTexImage2D(tex2D, 0, GL_DEPTH24_STENCIL8, s->iWidth, s->iHeight, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, 0);
-
-	qglFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, s->s_hBackBufferDepthTex, 0);
 	qglBindTexture(tex2D, 0);
 }
 
@@ -1041,42 +1170,50 @@ void R_GLFrameBufferColorTextureHBAO(FBO_Container_t *s)
 	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, s->s_hBackBufferTex2, 0);
 }
 
-void R_GLFrameBufferColorTextureDeferred(FBO_Container_t *s)
+void R_GLFrameBufferColorTextureDeferred(FBO_Container_t *s, int iInternalColorFormat)
 {
 	s->s_hBackBufferTex = GL_GenTexture();
 	qglBindTexture(GL_TEXTURE_2D, s->s_hBackBufferTex);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, s->iWidth, s->iHeight, 0, GL_RGB, GL_FLOAT, NULL);
+	qglTexImage2D(GL_TEXTURE_2D, 0, iInternalColorFormat, s->iWidth, s->iHeight, 0, GL_RGB, GL_FLOAT, NULL);
 	qglBindTexture(GL_TEXTURE_2D, 0);
 
 	s->s_hBackBufferTex2 = GL_GenTexture();
 	qglBindTexture(GL_TEXTURE_2D, s->s_hBackBufferTex2);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, s->iWidth, s->iHeight, 0, GL_RGB, GL_FLOAT, NULL);
+	qglTexImage2D(GL_TEXTURE_2D, 0, iInternalColorFormat, s->iWidth, s->iHeight, 0, GL_RGB, GL_FLOAT, NULL);
 	qglBindTexture(GL_TEXTURE_2D, 0);
 
 	s->s_hBackBufferTex3 = GL_GenTexture();
 	qglBindTexture(GL_TEXTURE_2D, s->s_hBackBufferTex3);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, s->iWidth, s->iHeight, 0, GL_RGB, GL_FLOAT, NULL);
+	qglTexImage2D(GL_TEXTURE_2D, 0, iInternalColorFormat, s->iWidth, s->iHeight, 0, GL_RGB, GL_FLOAT, NULL);
 	qglBindTexture(GL_TEXTURE_2D, 0);
 
 	s->s_hBackBufferTex4 = GL_GenTexture();
 	qglBindTexture(GL_TEXTURE_2D, s->s_hBackBufferTex4);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, s->iWidth, s->iHeight, 0, GL_RGB, GL_FLOAT, NULL);
+	qglTexImage2D(GL_TEXTURE_2D, 0, iInternalColorFormat, s->iWidth, s->iHeight, 0, GL_RGB, GL_FLOAT, NULL);
 	qglBindTexture(GL_TEXTURE_2D, 0);
 
-	s->iTextureColorFormat = GL_RGB32F;
+	s->s_hBackBufferTex5 = GL_GenTexture();
+	qglBindTexture(GL_TEXTURE_2D, s->s_hBackBufferTex5);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	qglTexImage2D(GL_TEXTURE_2D, 0, iInternalColorFormat, s->iWidth, s->iHeight, 0, GL_RGB, GL_FLOAT, NULL);
+	qglBindTexture(GL_TEXTURE_2D, 0);
+
+	s->iTextureColorFormat = iInternalColorFormat;
 
 	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s->s_hBackBufferTex, 0);
 	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, s->s_hBackBufferTex2, 0);
 	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, s->s_hBackBufferTex3, 0);
 	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, s->s_hBackBufferTex4, 0);
+	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT4, GL_TEXTURE_2D, s->s_hBackBufferTex5, 0);
 }
 
 void GL_GenerateFBO(void)
@@ -1151,7 +1288,7 @@ void GL_GenerateFBO(void)
 	GL_ClearFBO(&s_ToneMapFBO);
 	GL_ClearFBO(&s_DepthLinearFBO);
 	GL_ClearFBO(&s_HBAOCalcFBO);
-	GL_ClearFBO(&s_CloakFBO);
+	//GL_ClearFBO(&s_CloakFBO);
 
 	if(!bDoScaledFBO)
 		bDoMSAAFBO = false;
@@ -1162,7 +1299,7 @@ void GL_GenerateFBO(void)
 
 	if(bDoHDR)
 	{
-		iColorInternalFormat = GL_RGBA16F;
+		iColorInternalFormat = GL_RGBA32F;
 
 		const char *s_HDRColor;
 		if(g_pInterface->CommandLine->CheckParm("-hdrcolor", &s_HDRColor))
@@ -1201,8 +1338,8 @@ void GL_GenerateFBO(void)
 		s_MSAAFBO.iHeight = glheight;
 		R_GLGenFrameBuffer(&s_MSAAFBO);
 		R_GLFrameBufferColorTexture(&s_MSAAFBO, iColorInternalFormat, true);
-		R_GLFrameBufferDepthTexture(&s_MSAAFBO, GL_DEPTH_COMPONENT24, true);
-
+		R_GLFrameBufferDepthTexture(&s_MSAAFBO, GL_DEPTH24_STENCIL8, true);
+		R_GLGenRenderBuffer(&s_MSAAFBO, 2);
 		if (s_MSAAFBO.s_hBackBufferFBO)
 			qglEnable(GL_MULTISAMPLE);
 
@@ -1221,7 +1358,7 @@ void GL_GenerateFBO(void)
 		s_BackBufferFBO.iHeight = glheight;
 		R_GLGenFrameBuffer(&s_BackBufferFBO);
 		R_GLFrameBufferColorTexture(&s_BackBufferFBO, iColorInternalFormat, false);
-		R_GLFrameBufferDepthTexture(&s_BackBufferFBO, GL_DEPTH_COMPONENT24, false);
+		R_GLFrameBufferDepthTexture(&s_BackBufferFBO, GL_DEPTH24_STENCIL8, false);
 
 		if (qglCheckFramebufferStatusEXT(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
 		{
@@ -1234,7 +1371,7 @@ void GL_GenerateFBO(void)
 		s_BackBufferFBO2.iHeight = glheight;
 		R_GLGenFrameBuffer(&s_BackBufferFBO2);
 		R_GLFrameBufferColorTexture(&s_BackBufferFBO2, iColorInternalFormat, false);
-		R_GLFrameBufferDepthTexture(&s_BackBufferFBO2, GL_DEPTH_COMPONENT24, false);
+		R_GLFrameBufferDepthTexture(&s_BackBufferFBO2, GL_DEPTH24_STENCIL8, false);
 
 		if (qglCheckFramebufferStatusEXT(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
 		{
@@ -1359,8 +1496,8 @@ void GL_GenerateFBO(void)
 		s_GBufferFBO.iWidth = glwidth;
 		s_GBufferFBO.iHeight = glheight;
 		R_GLGenFrameBuffer(&s_GBufferFBO);
-		R_GLFrameBufferColorTextureDeferred(&s_GBufferFBO);
-		R_GLFrameBufferDepthTexture(&s_GBufferFBO, GL_DEPTH_COMPONENT24, false);
+		R_GLFrameBufferColorTextureDeferred(&s_GBufferFBO, iColorInternalFormat);
+		R_GLFrameBufferDepthTexture(&s_GBufferFBO, GL_DEPTH24_STENCIL8, false);
 
 		if (qglCheckFramebufferStatusEXT(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
 		{
@@ -1543,7 +1680,7 @@ void GL_GenerateFBO(void)
 		}
 	}
 
-	if (bDoScaledFBO)
+	/*if (bDoScaledFBO)
 	{
 		s_CloakFBO.iWidth = glwidth;
 		s_CloakFBO.iHeight = glheight;
@@ -1558,7 +1695,7 @@ void GL_GenerateFBO(void)
 			GL_FreeFBO(&s_CloakFBO);
 			gEngfuncs.Con_Printf("Cloak FBO rendering disabled due to create error.\n");
 		}
-	}
+	}*/
 
 	qglBindFramebufferEXT(GL_FRAMEBUFFER, 0);
 }
@@ -1614,29 +1751,28 @@ void GL_BeginRendering(int *x, int *y, int *width, int *height)
 		qglBindFramebufferEXT(GL_FRAMEBUFFER, s_BackBufferFBO.s_hBackBufferFBO);
 	}
 
-	r_wsurf_drawcall = 0;
-	r_studio_drawcall = 0;
-	
-	qglClearColor(0.0, 0.0, 0.0, 1.0);
-	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	qglClearColor(0.0, 0.0, 0.0, 1);
+	qglStencilMask(0xFF);
+	qglClearStencil(0);
+	qglDepthMask(GL_TRUE);
+	qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	qglStencilMask(0);
 }
 
-void R_PreRenderView()
+void R_PreRenderView(int a1)
 {
+	g_SvEngine_DrawPortalView = a1;
+
 	if (!r_refdef->onlyClientDraws)
 	{
-		(*c_alias_polys) = 0;
-		(*c_brush_polys) = 0;
 		if (r_water && r_water->value && waters_active)
 		{
 			R_RenderWaterView();
 		}
-		if (r_shadow && r_shadow->value)
+		if (r_shadow && r_shadow->value && !g_SvEngine_DrawPortalView)
 		{
 			R_RenderShadowMap();
 		}
-		saved_c_alias_polys = (*c_alias_polys);
-		saved_c_brush_polys = (*c_brush_polys);
 	}
 
 	if (s_BackBufferFBO.s_hBackBufferFBO)
@@ -1645,7 +1781,7 @@ void R_PreRenderView()
 			qglBindFramebufferEXT(GL_FRAMEBUFFER, s_MSAAFBO.s_hBackBufferFBO);
 		else
 			qglBindFramebufferEXT(GL_FRAMEBUFFER, s_BackBufferFBO.s_hBackBufferFBO);
-	}	
+	}
 }
 
 void R_PostRenderView()
@@ -1673,31 +1809,146 @@ void R_PostRenderView()
 		R_DoHDR();
 	}
 
-	if (r_speeds->value)
+	g_SvEngine_DrawPortalView = 0;	
+}
+
+void R_PreDrawViewModel(void)
+{
+	(*currententity) = cl_viewent;
+
+	if (!r_drawviewmodel->value)
+		return;
+
+	if (gExportfuncs.CL_IsThirdPerson())
+		return;
+
+	if (chase_active->value)
+		return;
+
+	if ((*envmap))
+		return;
+
+	if (!r_drawentities->value)
+		return;
+
+	if (cl_stats[0] <= 0)
+		return;
+
+	if (!(*currententity)->model)
+		return;
+
+	if (r_params.viewentity > r_params.maxclients)
+		return;
+
+	switch ((*currententity)->model->type)
 	{
-		gEngfuncs.Con_Printf("%d wsurf drawcall, %d studio drawcall\n", r_wsurf_drawcall, r_studio_drawcall);
+	case mod_studio:
+	{
+		if (!(*cl_weaponstarttime))
+			(*cl_weaponstarttime) = (*cl_time);
+
+		(*currententity)->curstate.sequence = (*cl_weaponsequence);
+		(*currententity)->curstate.frame = 0;
+		(*currententity)->curstate.framerate = 1;
+		(*currententity)->curstate.animtime = (*cl_weaponstarttime);
+
+		auto ent = gEngfuncs.GetEntityByIndex((*currententity)->index);
+		for (int i = 0; i < 4; i++)
+		{
+			VectorCopy(ent->origin, (*currententity)->attachment[i]);
+		}
+
+		(*gpStudioInterface)->StudioDrawModel(STUDIO_EVENTS);
+		break;
+	}
 	}
 }
 
 void R_RenderView_SvEngine(int a1)
 {
-	if (a1 == 0)
+	if (!a1)
 	{
-		R_PreRenderView();
-
-		gRefFuncs.R_RenderView_SvEngine(a1);
-
-		R_PostRenderView();
+		r_wsurf_drawcall = 0;
+		r_wsurf_polys = 0;
+		r_studio_drawcall = 0;
+		r_studio_polys = 0;
 	}
-	else
+
+	if (r_norefresh->value)
+		return;
+
+	if (!r_worldmodel)
 	{
-		gRefFuncs.R_RenderView_SvEngine(a1);
+		Sys_ErrorEx("R_RenderView: NULL worldmodel");
+	}
+
+	double time1;
+
+	if (!a1 && r_speeds->value)
+	{
+		time1 = gEngfuncs.GetAbsoluteTime();
+	}
+
+	R_ForceCVars(r_params.maxclients > 1);
+
+	R_PreRenderView(a1);
+
+	float clearColor[3];
+	R_ParseVectorCvar(gl_clearcolor, clearColor);
+
+	qglClearColor(clearColor[0], clearColor[1], clearColor[2], 1);
+
+	qglStencilMask(0xFF);
+	qglClearStencil(0);
+	qglDepthMask(GL_TRUE);
+
+	if (!gl_clear->value || a1)
+		qglClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	else
+		qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+	qglStencilMask(0);
+
+	qglDepthFunc(GL_LEQUAL);
+	qglDepthRange(0, 1);
+
+	if (!r_refdef->onlyClientDraws)
+		R_PreDrawViewModel();
+
+	R_RenderScene();
+
+	if (!r_refdef->onlyClientDraws)
+		R_DrawViewModel();
+
+	R_PolyBlend();
+
+	R_PostRenderView();
+
+	S_ExtraUpdate();
+
+	if (!a1 && r_speeds->value)
+	{
+		float framerate = (*cl_time) - (*cl_oldtime);
+
+		if (framerate > 0)
+			framerate = 1.0 / framerate;
+
+		auto time2 = gEngfuncs.GetAbsoluteTime();
+
+		gEngfuncs.Con_Printf("%3ifps %3i ms, %4i brushpolys, %4i brushdraw, %4i studiopolys, %4i studiodraw\n",
+			(int)(framerate + 0.5), (int)((time2 - time1) * 1000), 
+			r_wsurf_polys, r_wsurf_drawcall,
+			r_studio_polys, r_studio_drawcall
+		);
+
+		*c_alias_polys = r_studio_polys;
+		*c_brush_polys = r_wsurf_polys;
 	}
 }
 
 void R_RenderView(void)
 {
-	R_PreRenderView();
+	R_PreRenderView(0);
 
 	gRefFuncs.R_RenderView();
 
@@ -1707,30 +1958,6 @@ void R_RenderView(void)
 void R_RenderScene(void)
 {
 	gRefFuncs.R_RenderScene();
-
-	if (!drawreflect && !drawrefract)
-	{
-		if (s_MSAAFBO.s_hBackBufferFBO)
-		{
-			for (int sampleIndex = 0; sampleIndex < max(1, gl_msaa_samples); sampleIndex++)
-			{
-				if (!R_DoSSAO(sampleIndex))
-				{
-					break;
-				}
-			}
-		}
-		else
-		{
-			R_DoSSAO(-1);
-		}
-	}
-
-	if (!r_refdef->onlyClientDraws)
-	{
-		(*c_alias_polys) += saved_c_alias_polys;
-		(*c_brush_polys) += saved_c_brush_polys;
-	}
 }
 
 void GL_EndRendering(void)
@@ -1746,7 +1973,9 @@ void GL_EndRendering(void)
 	{
 		qglBindFramebufferEXT(GL_DRAW_FRAMEBUFFER, 0);
 		qglBindFramebufferEXT(GL_READ_FRAMEBUFFER, s_BackBufferFBO.s_hBackBufferFBO);
-		qglClearColor(0, 0, 0, 0);
+		
+		qglClearColor(0, 0, 0, 1);
+		qglDepthMask(GL_TRUE);
 		qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		int windowW = glwidth;
@@ -1867,6 +2096,10 @@ void R_InitCvars(void)
 
 	gl_finish = gEngfuncs.pfnGetCvarPointer("gl_finish");
 	gl_clear = gEngfuncs.pfnGetCvarPointer("gl_clear");
+	gl_clearcolor = gEngfuncs.pfnGetCvarPointer("gl_clearcolor");
+	if(!gl_clearcolor)
+		gl_clearcolor = gEngfuncs.pfnRegisterVariable("gl_clearcolor", "0 0 0", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
+
 	gl_cull = gEngfuncs.pfnGetCvarPointer("gl_cull");
 	gl_texsort = gEngfuncs.pfnGetCvarPointer("gl_texsort");
 
@@ -1927,6 +2160,7 @@ void R_InitCvars(void)
 	v_lambert = gEngfuncs.pfnGetCvarPointer("lambert");
 
 	cl_righthand = gEngfuncs.pfnGetCvarPointer("cl_righthand");
+	chase_active = gEngfuncs.pfnGetCvarPointer("chase_active");
 }
 
 void R_Init(void)
@@ -1937,8 +2171,6 @@ void R_Init(void)
 	R_InitShadow();
 	R_InitWSurf();
 	R_InitGLHUD();
-	R_Init3DSky();
-	R_InitCloak();
 	R_InitLight();
 
 	Draw_Init();
@@ -1950,6 +2182,7 @@ void R_Shutdown(void)
 	R_FreeWater();
 	R_ShutdownLight();
 	R_ShutdownWSurf();
+	R_ShutdownStudio();
 }
 
 void R_ForceCVars(qboolean mp)
@@ -1970,7 +2203,6 @@ void R_NewMap(void)
 	memset(&r_params, 0, sizeof(r_params));
 
 	R_ClearWater();
-	R_Clear3DSky();
 	R_VidInitWSurf();
 }
 
@@ -1992,4 +2224,77 @@ float *R_GetAttachmentPoint(int entity, int attachment)
 		return pEntity->attachment[attachment - 1];
 
 	return pEntity->origin;
+}
+
+qboolean R_ParseVectorCvar(cvar_t *a1, float *vec)
+{
+	double v2; // st7@2
+	double v3; // st6@2
+	double v4; // st5@2
+	double v5; // st7@3
+	double v6; // st4@7
+	double v7; // st4@11
+	double v8; // st7@13
+	qboolean result; // eax@14
+	float v10; // [sp+4h] [bp-10h]@1
+	float v11; // [sp+8h] [bp-Ch]@1
+	float v12; // [sp+Ch] [bp-8h]@1
+
+	if (sscanf(a1->string, "%f %f %f", &v10, &v11, &v12) == 3)
+	{
+		vec[0] = v10;
+		vec[1] = v11;
+		vec[2] = v12;
+		v2 = vec[0];
+		v3 = 0.0;
+		v4 = 255.0;
+		if (v2 >= 0.0)
+		{
+			if (v2 <= 255.0)
+			{
+				v4 = vec[0];
+				v5 = 255.0;
+			}
+			else
+			{
+				v5 = 255.0;
+			}
+		}
+		else
+		{
+			v5 = 255.0;
+			v4 = 0.0;
+		}
+		vec[0] = v4 * 0.0039215689;
+		v6 = vec[1];
+		if (v6 >= 0.0)
+		{
+			if (v6 > v5)
+				v6 = v5;
+		}
+		else
+		{
+			v6 = 0.0;
+		}
+		vec[1] = v6 * 0.0039215689;
+		v7 = vec[2];
+		if (v7 < 0.0)
+		{
+			v8 = 0.0039215689;
+		}
+		else
+		{
+			if (v7 <= v5)
+				v5 = vec[2];
+			v3 = v5;
+			v8 = 0.0039215689;
+		}
+		result = 1;
+		vec[2] = v8 * v3;
+	}
+	else
+	{
+		result = 0;
+	}
+	return result;
 }

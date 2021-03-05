@@ -64,6 +64,7 @@ typedef struct FBO_Container_s
 	GLuint s_hBackBufferTex2;
 	GLuint s_hBackBufferTex3;
 	GLuint s_hBackBufferTex4;
+	GLuint s_hBackBufferTex5;
 	GLuint s_hBackBufferDepthTex;
 	int iWidth;
 	int iHeight;

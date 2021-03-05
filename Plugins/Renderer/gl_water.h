@@ -8,7 +8,7 @@ typedef struct
 	int waterfogcolor;
 	int entitymatrix;
 	int eyepos;
-	int zmax;
+	int clipinfo;
 	int time;
 	int fresnel;
 	int depthfactor;
@@ -38,7 +38,6 @@ typedef struct r_water_s
 	cl_entity_t *ent;
 	vec3_t org;
 	colorVec color;
-	int is3dsky;
 	int texwidth;
 	int texheight;
 	int free;
@@ -97,3 +96,4 @@ void R_UseWaterProgram(int state, water_program_t *progOutput);
 
 #define WATER_UNDERWATER_ENABLED		1
 #define WATER_GBUFFER_ENABLED			2
+#define WATER_DEPTH_ENABLED				4
