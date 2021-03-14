@@ -7,6 +7,8 @@
 
 #define R_ROTATEFORENTITY_SVENGINE "\x83\xEC\x2A\x8B\x2A\x24\x2A\x8B\x2A\x24\x2A\xD9\x00"
 
+#define R_DECALSHOTINTERNAL_SVENGINE "\x83\xEC\x2A\xA1\x2A\x2A\x2A\x2A\x33\xC4\x89\x44\x24\x2A\x8B\x54\x24\x2A\x8B\x4C\x24\x2A\x53\x8B\x5C\x24\x2A\x56\x69\xF2\xB8\x0B\x00\x00"
+
 #define R_CLEAR_SIG "\xD9\x05\x2A\x2A\x2A\x2A\xDC\x1D\x2A\x2A\x2A\x2A\xDF\xE0\xF6\xC4\x2A\x2A\x2A\xD9\x05\x2A\x2A\x2A\x2A\xD8\x1D\x2A\x2A\x2A\x2A\xDF\xE0"
 #define R_CLEAR_SIG2 "\x8B\x15\x2A\x2A\x2A\x2A\x33\xC0\x83\xFA\x01\x0F\x9F\xC0\x50\xE8\x2A\x2A\x2A\x2A\xD9\x05\x2A\x2A\x2A\x2A\xDC\x1D\x2A\x2A\x2A\x2A\x83\xC4\x04\xDF\xE0"
 #define R_CLEAR_SIG_NEW "\x8B\x15\x2A\x2A\x2A\x2A\x33\xC0\x83\xFA\x01\x0F\x9F\xC0\x50\xE8\x2A\x2A\x2A\x2A\xD9\x05\x2A\x2A\x2A\x2A\xDC\x1D\x2A\x2A\x2A\x2A\x83\xC4\x04"
@@ -370,6 +372,9 @@ void R_FillAddress(void)
 		gRefFuncs.R_DrawSpriteModel = (void(*)(cl_entity_t *))Search_Pattern(R_DRAWSRPITEMODEL_SIG_SVENGINE);
 		Sig_FuncNotFound(R_DrawSpriteModel);
 
+		gRefFuncs.R_DecalShootInternal = (decltype(gRefFuncs.R_DecalShootInternal))Search_Pattern(R_DECALSHOTINTERNAL_SVENGINE);
+		Sig_FuncNotFound(R_DecalShootInternal);
+
 		addr = (DWORD)Search_Pattern_From(R_DrawSequentialPoly, R_BEGINDETAILTEXTURE_SVENGINE);
 		Sig_AddrNotFound(R_BeginDetailTexture);
 		addr += sizeof(R_BEGINDETAILTEXTURE_SVENGINE) - 1;
@@ -378,6 +383,19 @@ void R_FillAddress(void)
 
 		gRefFuncs.R_RotateForEntity = (void(*)(float *,cl_entity_t *))Search_Pattern(R_ROTATEFORENTITY_SVENGINE);
 		Sig_FuncNotFound(R_RotateForEntity);
+
+#define R_ADDTENTITY_STRING_SIG "Can't add transparent entity. Too many"
+		addr = (DWORD)Search_Pattern(R_ADDTENTITY_STRING_SIG);
+		Sig_AddrNotFound(R_AddTEntity_String);
+		char pattern[] = "\x50\x68\x2A\x2A\x2A\x2A\xE8";
+		*(DWORD *)(pattern + 2) = addr;
+		addr = (DWORD)Search_Pattern(pattern);
+		Sig_AddrNotFound(R_AddTEntity_Call);
+
+		char pattern2[] = "\xCC\xCC\xCC\x83\xEC";
+		addr = (DWORD)g_pMetaHookAPI->SearchPattern((PUCHAR)addr - 0x50, 0x50, pattern2, sizeof(pattern2) - 1);
+		Sig_AddrNotFound(R_AddTEntity_Call);
+		gRefFuncs.R_AddTEntity = (decltype(gRefFuncs.R_AddTEntity))(addr + 3);
 	}
 	else if (g_dwEngineBuildnum >= 5953)
 	{
@@ -835,6 +853,15 @@ void R_FillAddress(void)
 		r_refdef = (refdef_t *)(*(DWORD *)(addr + 11) - offsetof(refdef_t, viewangles));
 		r_origin = (vec_t *)(*(DWORD *)(addr + 17) - 8);
 
+#define G_USERFOGON_SIG "\x83\x3D\x2A\x2A\x2A\x2A\x00\x2A\x2A\x68\x60\x0B\x00\x00"
+		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_RenderScene, 0x600, G_USERFOGON_SIG, sizeof(G_USERFOGON_SIG) - 1);
+		Sig_AddrNotFound(g_bUserFogOn);
+		g_bUserFogOn = *(int **)(addr + 2);
+		g_UserFogColor = (float *)(g_bUserFogOn + 1);
+		g_UserFogDensity = (float *)(g_UserFogDensity + 4);
+		g_UserFogStart = (float *)(g_UserFogDensity + 1);
+		g_UserFogEnd = (float *)(g_UserFogStart + 1);
+
 #define GLTEXTURES_SIG_SVENGINE "\x8B\x15\x2A\x2A\x2A\x2A\x2A\x2A\x2A\x2A\x8B\x1D"
 		//Search in GL_LoadTexture2
 		//.text : 01D4EBF4 8B 15 F0 C5 0F 03                                   mov     edx, numgltextures
@@ -1016,6 +1043,7 @@ void R_FillAddress(void)
 		addr = (DWORD)g_pMetaHookAPI->SearchPattern((void *)gRefFuncs.R_DrawTEntitiesOnList, 0x500, TRANSOBJECTS_SIG_SVENGINE, sizeof(TRANSOBJECTS_SIG_SVENGINE) - 1);
 		Sig_AddrNotFound(transObjects);
 		transObjects = *(transObjRef ***)(addr + 1);
+		maxTransObjs = (int *)((char *)transObjects - 4);
 		numTransObjs = (int *)((char *)transObjects - 8);
 
 #define NORMALINDEX_SIG_SVENGINE "\x83\x3C\xB5\x2A\x2A\x2A\x2A\x00"
@@ -1380,28 +1408,31 @@ void R_InstallHook(void)
 {
 	g_pMetaHookAPI->InlineHook(gRefFuncs.GL_BeginRendering, GL_BeginRendering, (void *&)gRefFuncs.GL_BeginRendering);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.GL_EndRendering, GL_EndRendering, (void *&)gRefFuncs.GL_EndRendering);
+
 	if(gRefFuncs.R_RenderView_SvEngine)
 		g_pMetaHookAPI->InlineHook(gRefFuncs.R_RenderView_SvEngine, R_RenderView_SvEngine, (void *&)gRefFuncs.R_RenderView_SvEngine);
 	else
 		g_pMetaHookAPI->InlineHook(gRefFuncs.R_RenderView, R_RenderView, (void *&)gRefFuncs.R_RenderView);
+
 	//g_pMetaHookAPI->InlineHook(gRefFuncs.R_RenderScene, R_RenderScene, (void *&)gRefFuncs.R_RenderScene);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_DrawWorld, R_DrawWorld, (void *&)gRefFuncs.R_DrawWorld);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_DrawSpriteModel, R_DrawSpriteModel, (void *&)gRefFuncs.R_DrawSpriteModel);	
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_NewMap, R_NewMap, (void *&)gRefFuncs.R_NewMap);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_SetupGL, R_SetupGL, (void *&)gRefFuncs.R_SetupGL);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_ForceCVars, R_ForceCVars, (void *&)gRefFuncs.R_ForceCVars);
-//	g_pMetaHookAPI->InlineHook(gRefFuncs.R_CullBox, R_CullBox, (void *&)gRefFuncs.R_CullBox);
+	g_pMetaHookAPI->InlineHook(gRefFuncs.R_CullBox, R_CullBox, (void *&)gRefFuncs.R_CullBox);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_MarkLeaves, R_MarkLeaves, (void *&)gRefFuncs.R_MarkLeaves);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.Mod_PointInLeaf, Mod_PointInLeaf, (void *&)gRefFuncs.Mod_PointInLeaf);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_DrawSequentialPoly, R_DrawSequentialPoly, (void *&)gRefFuncs.R_DrawSequentialPoly);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.EmitWaterPolys, EmitWaterPolys, (void *&)gRefFuncs.EmitWaterPolys);
-	g_pMetaHookAPI->InlineHook(gRefFuncs.R_DrawDecals, R_DrawDecals, (void *&)gRefFuncs.R_DrawDecals);
+	//g_pMetaHookAPI->InlineHook(gRefFuncs.R_DrawDecals, R_DrawDecals, (void *&)gRefFuncs.R_DrawDecals);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_DrawSkyChain, R_DrawSkyChain, (void *&)gRefFuncs.R_DrawSkyChain);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_BuildLightMap, R_BuildLightMap, (void *&)gRefFuncs.R_BuildLightMap);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_AddDynamicLights, R_AddDynamicLights, (void *&)gRefFuncs.R_AddDynamicLights);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_StudioRenderFinal, R_StudioRenderFinal, (void *&)gRefFuncs.R_StudioRenderFinal);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_GLStudioDrawPoints, R_GLStudioDrawPoints, (void *&)gRefFuncs.R_GLStudioDrawPoints);
-	g_pMetaHookAPI->InlineHook(gRefFuncs.R_RotateForEntity, R_RotateForEntity, (void *&)gRefFuncs.R_RotateForEntity);
 	g_pMetaHookAPI->InlineHook(gRefFuncs.R_DrawBrushModel, R_DrawBrushModel, (void *&)gRefFuncs.R_DrawBrushModel);
+	g_pMetaHookAPI->InlineHook(gRefFuncs.R_AddTEntity, R_AddTEntity, (void *&)gRefFuncs.R_AddTEntity);
+	//g_pMetaHookAPI->InlineHook(gRefFuncs.R_DecalShootInternal, R_DecalShootInternal, (void *&)gRefFuncs.R_DecalShootInternal);
 
 }

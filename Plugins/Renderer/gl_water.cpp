@@ -2,8 +2,6 @@
 #include <sstream>
 
 //renderer
-qboolean drawreflect;
-qboolean drawrefract;
 vec3_t water_view;
 
 //water
@@ -18,9 +16,6 @@ int water_normalmap = 0;
 
 SHADER_DEFINE(drawdepth);
 
-int save_userfogon;
-int *g_bUserFogOn;
-
 int saved_cl_waterlevel;
 
 //cvar
@@ -30,7 +25,6 @@ cvar_t *r_water_fresnel = NULL;
 cvar_t *r_water_depthfactor = NULL;
 cvar_t *r_water_normfactor = NULL;
 cvar_t *r_water_novis = NULL;
-cvar_t *r_water_texscale = NULL;
 cvar_t *r_water_minheight = NULL;
 
 std::unordered_map<int, water_program_t> g_WaterProgramTable;
@@ -55,7 +49,7 @@ void R_UseWaterProgram(int state, water_program_t *progOutput)
 
 		auto def = defs.str();
 
-		prog.program = R_CompileShaderFileEx("resource\\shader\\water_shader.vsh", NULL, "resource\\shader\\water_shader.fsh", def.c_str(), NULL, def.c_str());
+		prog.program = R_CompileShaderFileEx("renderer\\shader\\water_shader.vsh", NULL, "renderer\\shader\\water_shader.fsh", def.c_str(), NULL, def.c_str());
 		if (prog.program)
 		{
 			SHADER_UNIFORM(prog, waterfogcolor, "waterfogcolor");
@@ -94,9 +88,9 @@ void R_UseWaterProgram(int state, water_program_t *progOutput)
 		if (prog.entitymatrix != -1)
 		{
 			if (r_rotate_entity)
-				qglUniformMatrix4fvARB(prog.entitymatrix, 1, false, r_rotate_entity_matrix);
+				qglUniformMatrix4fvARB(prog.entitymatrix, 1, true, (float *)r_rotate_entity_matrix);
 			else
-				qglUniformMatrix4fvARB(prog.entitymatrix, 1, false, r_identity_matrix);
+				qglUniformMatrix4fvARB(prog.entitymatrix, 1, false, (float *)r_identity_matrix);
 		}
 
 		if (progOutput)
@@ -183,12 +177,9 @@ void R_InitWater(void)
 	r_water_depthfactor = gEngfuncs.pfnRegisterVariable("r_water_depthfactor", "50", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_water_normfactor = gEngfuncs.pfnRegisterVariable("r_water_normfactor", "1.5", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_water_novis = gEngfuncs.pfnRegisterVariable("r_water_novis", "0", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
-	r_water_texscale = gEngfuncs.pfnRegisterVariable("r_water_texscale", "0.5", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_water_minheight = gEngfuncs.pfnRegisterVariable("r_water_minheight", "7.5", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 
 	curwater = NULL;
-	drawreflect = false;
-	drawrefract = false;
 
 	R_ClearWater();
 }
@@ -202,7 +193,7 @@ int R_ShouldReflect(void)
 	return 1;
 }
 
-r_water_t *R_GetActiveWater(cl_entity_t *ent, vec3_t p, colorVec *color)
+r_water_t *R_GetActiveWater(cl_entity_t *ent, vec3_t p, vec3_t n, colorVec *color)
 {
 	r_water_t *w;
 
@@ -236,16 +227,9 @@ r_water_t *R_GetActiveWater(cl_entity_t *ent, vec3_t p, colorVec *color)
 	int water_texture_width = glwidth;
 	int water_texture_height = glheight;
 
-	int desired_height = glheight * clamp(r_water_texscale->value, 0.1, 2.0);
-	while ((water_texture_height >> 1) >= desired_height)
-	{
-		water_texture_width >>= 1;
-		water_texture_height >>= 1;
-	}
-
 	//Load if normalmap not exists.
 	if (!water_normalmap)
-		water_normalmap = R_LoadTexture("resource\\tga\\water_normalmap.tga", "resource\\tga\\water_normalmap.tga", NULL, NULL, GLT_SYSTEM);
+		water_normalmap = R_LoadTexture("renderer\\texture\\water_normalmap.tga", "renderer\\texture\\water_normalmap.tga", NULL, NULL, GLT_SYSTEM);
 
 	//Upload color textures and depth textures.
 	if (!w->reflectmap)
@@ -291,6 +275,7 @@ r_water_t *R_GetActiveWater(cl_entity_t *ent, vec3_t p, colorVec *color)
 	w->refractmap_ready = false;
 
 	VectorCopy(p, w->vecs);
+	VectorCopy(n, w->norm);
 	w->ent = ent;
 	w->org[0] = (ent->curstate.mins[0] + ent->curstate.maxs[0]) / 2;
 	w->org[1] = (ent->curstate.mins[1] + ent->curstate.maxs[1]) / 2;
@@ -301,52 +286,15 @@ r_water_t *R_GetActiveWater(cl_entity_t *ent, vec3_t p, colorVec *color)
 	return w;
 }
 
-void R_EnableClip(qboolean isdrawworld)
-{
-	double clipPlane[] = {0, 0, 0, 0};
-
-	if(drawreflect)
-	{
-		if(saved_cl_waterlevel > 2)
-		{
-			clipPlane[2] = -1.0;
-			clipPlane[3] = curwater->vecs[2];
-		}
-		else
-		{
-			clipPlane[2] = 1.0;
-			clipPlane[3] = -curwater->vecs[2];
-		}
-	}
-	if(drawrefract)
-	{
-		return;
-
-		if (saved_cl_waterlevel > 2)
-		{
-			clipPlane[2] = 1.0;
-			clipPlane[3] = curwater->vecs[2]; 
-		}
-		else
-		{
-			clipPlane[2] = -1.0;
-			clipPlane[3] = curwater->vecs[2];
-		}
-	}
-
-	qglEnable(GL_CLIP_PLANE0);
-	qglClipPlane(GL_CLIP_PLANE0, clipPlane);
-}
-
 void R_RenderReflectView(void)
 {
-	if (s_WaterFBO.s_hBackBufferFBO)
-	{
-		qglBindFramebufferEXT(GL_FRAMEBUFFER, s_WaterFBO.s_hBackBufferFBO);
-		qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, curwater->reflectmap, 0);
-		qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, curwater->depthreflmap, 0);
-		qglDrawBuffer(GL_COLOR_ATTACHMENT0);
-	}
+	qglBindFramebufferEXT(GL_FRAMEBUFFER, s_WaterFBO.s_hBackBufferFBO);
+	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, curwater->reflectmap, 0);
+	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, curwater->depthreflmap, 0);
+	qglDrawBuffer(GL_COLOR_ATTACHMENT0);
+
+	s_WaterFBO.s_hBackBufferTex = curwater->reflectmap;
+	s_WaterFBO.s_hBackBufferDepthTex = curwater->depthreflmap;
 
 	qglClearColor(curwater->color.r / 255.0f, curwater->color.g / 255.0f, curwater->color.b / 255.0f, 1);
 	qglStencilMask(0xFF);
@@ -359,13 +307,24 @@ void R_RenderReflectView(void)
 
 	VectorCopy(r_refdef->vieworg, water_view);
 
-	VectorCopy(water_view, r_refdef->vieworg);
+	float vForward[3], vRight[3], vUp[3];
+	gEngfuncs.pfnAngleVectors(r_refdef->viewangles, vForward, vRight, vUp);
 
-	r_refdef->vieworg[2] = (2 * curwater->vecs[2]) - r_refdef->vieworg[2];
-	r_refdef->viewangles[0] = -r_refdef->viewangles[0];
+	float flDist = fabs(curwater->vecs[2] - r_refdef->vieworg[2]);
+	VectorMA(r_refdef->vieworg, -2 * flDist, curwater->norm, r_refdef->vieworg);
+
+	float neg_norm[3];
+	VectorCopy(curwater->norm, neg_norm);
+	VectorInverse(neg_norm);
+
+	float flDist2 = DotProduct(vForward, neg_norm);
+	VectorMA(vForward, -2 * flDist2, neg_norm, vForward);
+
+	r_refdef->viewangles[0] = -asin(vForward[2]) / M_PI * 180;
+	r_refdef->viewangles[1] = atan2(vForward[1], vForward[0]) / M_PI * 180;
 	r_refdef->viewangles[2] = -r_refdef->viewangles[2];
 
-	drawreflect = true;
+	r_draw_pass = r_draw_reflect;
 
 	saved_cl_waterlevel = *cl_waterlevel;
 	*cl_waterlevel = 0;
@@ -384,30 +343,22 @@ void R_RenderReflectView(void)
 	r_drawentities->value = saved_r_drawentities;
 	*cl_waterlevel = saved_cl_waterlevel;
 
-	qglDisable(GL_CLIP_PLANE0);
-
-	if (!s_WaterFBO.s_hBackBufferFBO)
-	{
-		qglBindTexture(GL_TEXTURE_2D, curwater->reflectmap);
-		qglCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, curwater->texwidth, curwater->texheight, 0);
-	}
-
 	R_PopRefDef();
 
-	drawreflect = false;
+	r_draw_pass = r_draw_normal;
 
 	curwater->reflectmap_ready = true;
 }
 
 void R_RenderRefractView(void)
 {
-	if (s_WaterFBO.s_hBackBufferFBO)
-	{
-		qglBindFramebufferEXT(GL_FRAMEBUFFER, s_WaterFBO.s_hBackBufferFBO);
-		qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, curwater->refractmap, 0);
-		qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, curwater->depthrefrmap, 0);
-		qglDrawBuffer(GL_COLOR_ATTACHMENT0);
-	}
+	qglBindFramebufferEXT(GL_FRAMEBUFFER, s_WaterFBO.s_hBackBufferFBO);
+	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, curwater->refractmap, 0);
+	qglFramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, curwater->depthrefrmap, 0);
+	qglDrawBuffer(GL_COLOR_ATTACHMENT0);
+
+	s_WaterFBO.s_hBackBufferTex = curwater->refractmap;
+	s_WaterFBO.s_hBackBufferDepthTex = curwater->depthrefrmap;
 
 	qglClearColor(curwater->color.r / 255.0f, curwater->color.g / 255.0f, curwater->color.b / 255.0f, 1);
 	qglStencilMask(0xFF);
@@ -422,7 +373,7 @@ void R_RenderRefractView(void)
 
 	VectorCopy(water_view, r_refdef->vieworg);
 
-	drawrefract = true;
+	r_draw_pass = r_draw_refract;
 
 	saved_cl_waterlevel = *cl_waterlevel;
 	*cl_waterlevel = 0;
@@ -441,20 +392,9 @@ void R_RenderRefractView(void)
 	r_drawentities->value = saved_r_drawentities;
 	*cl_waterlevel = saved_cl_waterlevel;
 
-	qglDisable(GL_CLIP_PLANE0);
-
-	if (!s_WaterFBO.s_hBackBufferFBO)
-	{
-		qglBindTexture(GL_TEXTURE_2D, curwater->refractmap);
-		qglCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, curwater->texwidth, curwater->texheight, 0);
-
-		qglBindTexture(GL_TEXTURE_2D, curwater->depthrefrmap);
-		qglCopyTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, 0, 0, curwater->texwidth, curwater->texheight, 0);
-	}
-
 	R_PopRefDef();
 
-	drawrefract = false;
+	r_draw_pass = r_draw_normal;
 
 	curwater->refractmap_ready = true;
 }

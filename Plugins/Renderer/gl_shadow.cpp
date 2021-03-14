@@ -41,13 +41,10 @@ cvar_t *r_shadow_alpha = NULL;
 cvar_t *r_shadow_angle_p = NULL;
 cvar_t *r_shadow_angle_y = NULL;
 cvar_t *r_shadow_angle_r = NULL;
-cvar_t *r_shadow_high_texsize = NULL;
 cvar_t *r_shadow_high_distance = NULL;
 cvar_t *r_shadow_high_scale = NULL;
-cvar_t *r_shadow_medium_texsize = NULL;
 cvar_t *r_shadow_medium_distance = NULL;
 cvar_t *r_shadow_medium_scale = NULL;
-cvar_t *r_shadow_low_texsize = NULL;
 cvar_t *r_shadow_low_distance = NULL;
 cvar_t *r_shadow_low_scale = NULL;
 cvar_t *r_shadow_map_override = NULL;
@@ -75,7 +72,7 @@ void R_InitShadow(void)
 {
 	if(gl_shader_support)
 	{
-		shadow.program = R_CompileShaderFile("resource\\shader\\shadow_shader.vsh", NULL, "resource\\shader\\shadow_shader.fsh");
+		shadow.program = R_CompileShaderFile("renderer\\shader\\shadow_shader.vsh", NULL, "renderer\\shader\\shadow_shader.fsh");
 		if (shadow.program)
 		{
 			SHADER_UNIFORM(shadow, texoffset_high, "texoffset_high");
@@ -98,13 +95,10 @@ void R_InitShadow(void)
 	r_shadow_angle_p = gEngfuncs.pfnRegisterVariable("r_shadow_angle_pitch", "90", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_shadow_angle_y = gEngfuncs.pfnRegisterVariable("r_shadow_angle_yaw", "0", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_shadow_angle_r = gEngfuncs.pfnRegisterVariable("r_shadow_angle_roll", "0", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
-	r_shadow_high_texsize = gEngfuncs.pfnRegisterVariable("r_shadow_high_texsize", "2048", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_shadow_high_distance = gEngfuncs.pfnRegisterVariable("r_shadow_high_distance", "400", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_shadow_high_scale = gEngfuncs.pfnRegisterVariable("r_shadow_high_scale", "4", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
-	r_shadow_medium_texsize = gEngfuncs.pfnRegisterVariable("r_shadow_medium_texsize", "2048", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_shadow_medium_distance = gEngfuncs.pfnRegisterVariable("r_shadow_medium_distance", "1024", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_shadow_medium_scale = gEngfuncs.pfnRegisterVariable("r_shadow_medium_scale", "2", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
-	r_shadow_low_texsize = gEngfuncs.pfnRegisterVariable("r_shadow_low_texsize", "2048", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_shadow_low_distance = gEngfuncs.pfnRegisterVariable("r_shadow_low_distance", "4096", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 	r_shadow_low_scale = gEngfuncs.pfnRegisterVariable("r_shadow_low_scale", "0.5", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 }
@@ -124,6 +118,8 @@ qboolean R_ShouldCastShadow(cl_entity_t *ent)
 	{
 		if (ent->index == 0)
 			return false;
+		if (ent->curstate.movetype == MOVETYPE_NONE)
+			return false;
 
 		return true;
 	}
@@ -131,24 +127,11 @@ qboolean R_ShouldCastShadow(cl_entity_t *ent)
 	return false;
 }
 
-int R_GetTextureSizePowerOfTwo(int texSize)
-{
-	int scaled_texsize;
-	for (scaled_texsize = 1; scaled_texsize < texSize; scaled_texsize <<= 1) {}
-
-	int max_size = max(128, gl_max_texture_size);
-	if (!s_BackBufferFBO.s_hBackBufferFBO && max_size > 512)//glCopyTexImage2D fix
-		max_size = 512;
-
-	return scaled_texsize;
-}
-
 void R_RenderShadowMap(void)
 {
-	int highSize = R_GetTextureSizePowerOfTwo(r_shadow_high_texsize->value);
-
-	if (!s_ShadowFBO.s_hBackBufferFBO)
-		highSize = 512;//the fucking glCopyTexImage2D limit up to 512x512
+	int highSize = gl_max_texture_size / 4;
+	if (highSize > 4096)
+		highSize = 4096;
 
 	if (!shadow_depthmap_high)
 	{
@@ -161,10 +144,9 @@ void R_RenderShadowMap(void)
 		GL_UploadShadowTexture(shadow_depthmap_high, highSize, highSize);
 	}
 
-	int mediumSize = R_GetTextureSizePowerOfTwo(r_shadow_medium_texsize->value);
-
-	if (!s_ShadowFBO.s_hBackBufferFBO)
-		mediumSize = 512;//the fucking glCopyTexImage2D limit up to 512x512
+	int mediumSize = gl_max_texture_size / 4;
+	if (mediumSize > 4096)
+		mediumSize = 4096;
 
 	if (!shadow_depthmap_medium)
 	{
@@ -177,10 +159,9 @@ void R_RenderShadowMap(void)
 		GL_UploadShadowTexture(shadow_depthmap_medium, mediumSize, mediumSize);
 	}
 
-	int lowSize = R_GetTextureSizePowerOfTwo(r_shadow_low_texsize->value);
-
-	if (!s_ShadowFBO.s_hBackBufferFBO)
-		lowSize = 512;//the fucking glCopyTexImage2D limit up to 512x512
+	int lowSize = gl_max_texture_size / 4;
+	if (lowSize > 4096)
+		lowSize = 4096;
 
 	if (!shadow_depthmap_low)
 	{
@@ -235,15 +216,15 @@ void R_RenderShadowMap(void)
 			if (distance > r_shadow_low_distance->value)
 				continue;
 
-			if (distance > r_shadow_medium_distance->value)
+			if (distance < r_shadow_high_distance->value)
 			{
-				if (shadow_numvisedicts_low < 512)
+				if (shadow_numvisedicts_high < 512)
 				{
-					shadow_visedicts_low[shadow_numvisedicts_low] = cl_visedicts[j];
-					shadow_numvisedicts_low++;
+					shadow_visedicts_high[shadow_numvisedicts_high] = cl_visedicts[j];
+					shadow_numvisedicts_high++;
 				}
 			}
-			else if (distance > r_shadow_high_distance->value)
+			else if (distance < r_shadow_medium_distance->value)
 			{
 				if (shadow_numvisedicts_medium < 512)
 				{
@@ -253,10 +234,10 @@ void R_RenderShadowMap(void)
 			}
 			else
 			{
-				if (shadow_numvisedicts_high < 512)
+				if (shadow_numvisedicts_low < 512)
 				{
-					shadow_visedicts_high[shadow_numvisedicts_high] = cl_visedicts[j];
-					shadow_numvisedicts_high++;
+					shadow_visedicts_low[shadow_numvisedicts_low] = cl_visedicts[j];
+					shadow_numvisedicts_low++;
 				}
 			}
 		}
@@ -268,7 +249,9 @@ void R_RenderShadowMap(void)
 	float *projmatrixArray[3] = { shadow_projmatrix_high , shadow_projmatrix_medium, shadow_projmatrix_low };
 	float *mvmatrixArray[3] = { shadow_mvmatrix_high , shadow_mvmatrix_medium, shadow_mvmatrix_low };
 
-	qglDisable(GL_CULL_FACE);
+	//qglDisable(GL_CULL_FACE);
+
+	r_draw_pass = r_draw_shadow;
 
 	for (int i = 0; i < 3; ++i)
 	{
@@ -278,7 +261,7 @@ void R_RenderShadowMap(void)
 		qglLoadIdentity();
 
 		float texsize = (float)texsizeArray[i] / scaleArray[i];
-		qglOrtho(-texsize, texsize, -texsize, texsize, -4096, 4096);
+		qglOrtho(-texsize / 2, texsize / 2, -texsize / 2,  texsize / 2, -4096, 4096);
 
 		qglMatrixMode(GL_MODELVIEW);
 		qglLoadIdentity();
@@ -320,7 +303,9 @@ void R_RenderShadowMap(void)
 		qglColorMask(1, 1, 1, 1);
 	}
 
-	qglEnable(GL_CULL_FACE);
+	r_draw_pass = r_draw_normal;
+
+	//qglEnable(GL_CULL_FACE);
 
 	if(s_ShadowFBO.s_hBackBufferFBO)
 	{
@@ -503,30 +488,39 @@ void R_DrawBrushModelShadow(cl_entity_t *e)
 
 	R_RotateForEntity(e->origin, e);
 
-	for (i = 0; i < clmodel->nummodelsurfaces; i++, psurf++)
+	if (r_wsurf_vbo->value)
 	{
-		pplane = psurf->plane;
+		auto modcache = R_PrepareWSurfVBO(clmodel);
 
-		if (psurf->flags & SURF_DRAWTURB)
+		R_EnableWSurfVBO(modcache);
+
+		R_DrawWSurfVBO(modcache);
+
+		R_EnableWSurfVBO(NULL);
+	}
+	else
+	{
+		for (i = 0; i < clmodel->nummodelsurfaces; i++, psurf++)
 		{
-			if (pplane->type != PLANE_Z && gl_watersides && !gl_watersides->value)
-				continue;
+			pplane = psurf->plane;
 
-			if (mins[2] + 1.0 >= pplane->dist)
-				continue;
-		}
-
-		dot = DotProduct(modelorg, pplane->normal) - pplane->dist;
-
-		if (((psurf->flags & SURF_PLANEBACK) && (dot < -BACKFACE_EPSILON)) || (!(psurf->flags & SURF_PLANEBACK) && (dot > BACKFACE_EPSILON)))
-		{
-			DrawGLPoly(psurf);
-		}
-		else
-		{
 			if (psurf->flags & SURF_DRAWTURB)
 			{
+				continue;
+			}
+
+			dot = DotProduct(modelorg, pplane->normal) - pplane->dist;
+
+			if (((psurf->flags & SURF_PLANEBACK) && (dot < -BACKFACE_EPSILON)) || (!(psurf->flags & SURF_PLANEBACK) && (dot > BACKFACE_EPSILON)))
+			{
 				DrawGLPoly(psurf);
+			}
+			else
+			{
+				if (psurf->flags & SURF_DRAWTURB)
+				{
+					DrawGLPoly(psurf);
+				}
 			}
 		}
 	}
@@ -597,10 +591,13 @@ void R_RenderShadowScenes(void)
 
 	float mvmatrix[16];
 	float invmvmatrix[16];
+	GLfloat texture0_env;
 	GLfloat texture1_env;
 	GLfloat texture2_env;
 
-	qglGetFloatv(GL_MODELVIEW_MATRIX, mvmatrix);
+	//test
+	//qglGetFloatv(GL_MODELVIEW_MATRIX, mvmatrix);
+	memcpy(mvmatrix, r_world_matrix, sizeof(mvmatrix));
 	InvertMatrix(mvmatrix, invmvmatrix);
 
 	qglUseProgramObjectARB(shadow.program);
@@ -633,10 +630,10 @@ void R_RenderShadowScenes(void)
 
 	qglEnable(GL_BLEND);
 	qglBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	//qglColor4f(0.1, 0.1, 0.1, 0.5);
 
 	//setup texture 0
 	GL_SelectTexture(TEXTURE0_SGIS);
+	qglGetTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &texture0_env);
 	qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 	qglEnable(GL_TEXTURE_GEN_S);
 	qglEnable(GL_TEXTURE_GEN_T);
@@ -723,33 +720,13 @@ void R_RenderShadowScenes(void)
 
 	if (r_wsurf_vbo->value)
 	{
-		qglEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+		auto modcache = R_PrepareWSurfVBO(r_worldmodel);
 
-		R_SetVBOState(VBOSTATE_NO_TEXTURE);
+		R_EnableWSurfVBOSolid(modcache);
 
-		for (size_t i = 0; i < r_wsurf.vTextureChainStatic.size(); ++i)
-		{
-			auto &texchain = r_wsurf.vTextureChainStatic[i];
+		R_DrawWSurfVBOSolid(modcache);
 
-			qglDrawElements(GL_POLYGON, texchain.iVertexCount, GL_UNSIGNED_INT, BUFFER_OFFSET(texchain.iStartIndex));
-
-			r_wsurf_drawcall++;
-			r_wsurf_polys += texchain.iFaceCount;
-		}
-
-		for (size_t i = 0; i < r_wsurf.vTextureChainScroll.size(); ++i)
-		{
-			auto &texchain = r_wsurf.vTextureChainScroll[i];
-
-			qglDrawElements(GL_POLYGON, texchain.iVertexCount, GL_UNSIGNED_INT, BUFFER_OFFSET(texchain.iStartIndex));
-
-			r_wsurf_drawcall++;
-			r_wsurf_polys += texchain.iFaceCount;
-		}
-
-		R_SetVBOState(VBOSTATE_OFF);
-
-		qglDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+		R_EnableWSurfVBOSolid(NULL);
 	}
 	else
 	{
@@ -795,6 +772,7 @@ void R_RenderShadowScenes(void)
 	qglMatrixMode(GL_TEXTURE);
 	qglLoadIdentity();
 	qglMatrixMode(GL_MODELVIEW);
+	qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, texture0_env);
 	qglDisable(GL_TEXTURE_GEN_S);
 	qglDisable(GL_TEXTURE_GEN_T);
 	qglDisable(GL_TEXTURE_GEN_R);

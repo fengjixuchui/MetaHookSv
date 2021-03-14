@@ -87,7 +87,7 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 	unsigned char *pSourcePalette;
 	int useProgram = 0, dontShader = false;
 
-	if (drawreflect)
+	if (r_draw_pass == r_draw_reflect)
 		return;
 
 	if (fa->texinfo->texture)
@@ -99,7 +99,7 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 		}
 	}
 
-	if (drawrefract)
+	if (r_draw_pass == r_draw_refract)
 	{
 		if ((*currententity) == r_worldentity)
 			dontShader = true;
@@ -125,7 +125,15 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 	cshift_water->destcolor[2] = pSourcePalette[11];
 	cshift_water->percent = pSourcePalette[12];
 
+	if (gWaterColor->r == 0 && gWaterColor->g == 0 && gWaterColor->b == 0)
+	{
+		gWaterColor->r = pSourcePalette[0];
+		gWaterColor->g = pSourcePalette[1];
+		gWaterColor->b = pSourcePalette[2];
+	}
+
 	gWaterColor->a = 255;
+
 	if ((*currententity)->curstate.rendermode == kRenderTransTexture)
 		gWaterColor->a = (*r_blend) * 255;
 
@@ -138,8 +146,6 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 	qglStencilMask(0xFF);
 	qglStencilFunc(GL_ALWAYS, 1, 0xFF);
 	qglStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-
-	R_SetVBOState(VBOSTATE_OFF);
 
 	R_UseGBufferProgram(GBUFFER_DIFFUSE_ENABLED);
 	R_SetGBufferMask(GBUFFER_MASK_ALL);
@@ -156,13 +162,13 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 		}
 		else
 		{
-			waterObject = R_GetActiveWater((*currententity), tempVert, gWaterColor);
+			waterObject = R_GetActiveWater((*currententity), tempVert, brushface->normal, gWaterColor);
 		}
 
 		if(waterObject && waterObject->refractmap_ready && ((waterObject->reflectmap_ready && bAboveWater) || !bAboveWater))
 		{
 			float alpha = 1;
-			if ((*currententity)->curstate.rendermode == kRenderTransTexture)
+			if ((*currententity)->curstate.rendermode == kRenderTransTexture || (*currententity)->curstate.rendermode == kRenderTransAdd)
 				alpha = (*r_blend);
 
 			int programState = 0;
@@ -229,7 +235,7 @@ void EmitWaterPolys(msurface_t *fa, int direction)
 	else
 		scale = (*currententity)->curstate.scale;
 
-	if (drawrefract)
+	if (r_draw_pass == r_draw_refract)
 		scale = 0;
 
 	if (useProgram)
@@ -633,7 +639,6 @@ void MakeSkyVec(float s, float t, int axis)
 	t = 1.0f - t;
 
 	qglTexCoord2f(s, t);
-	//qglNormal3fv();
 	qglVertex3fv(v);
 }
 

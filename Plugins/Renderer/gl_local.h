@@ -14,17 +14,12 @@
 #include <pm_movevars.h>
 
 #include "plugins.h"
-
 #include "exportfuncs.h"
-
-#include "bspfile.h"
 #include "qgl.h"
+#include "ref_int_internal.h"
 
 #include "gl_shader.h"
 #include "gl_model.h"
-#include "enginedef.h"
-
-#include "gl_util.h"
 #include "gl_water.h"
 #include "gl_studio.h"
 #include "gl_hud.h"
@@ -33,7 +28,6 @@
 #include "gl_wsurf.h"
 #include "gl_draw.h"
 
-#include "ref_int_internal.h"
 
 extern refdef_t *r_refdef;
 extern ref_params_t r_params;
@@ -57,14 +51,8 @@ extern float windowvideoaspect_old;
 extern float scr_fov_value;
 extern mplane_t *frustum;
 extern mleaf_t **r_viewleaf, **r_oldviewleaf;
-extern texture_t *r_notexture_mip;
-
-extern int mirrortexturenum;
-extern qboolean mirror;
-extern mplane_t *mirror_plane;
 
 extern float yfov;
-extern float screenaspect;
 
 extern vec_t *vup;
 extern vec_t *vpn;
@@ -91,21 +79,28 @@ extern int *cl_light_level;
 extern int *c_alias_polys;
 extern int *c_brush_polys;
 
+//fog
+extern int *g_bUserFogOn;
+extern float *g_UserFogColor;
+extern float *g_UserFogDensity;
+extern float *g_UserFogStart;
+extern float *g_UserFogEnd;
+
 //gl extension
 extern qboolean gl_framebuffer_object;
 extern qboolean gl_shader_support;
 extern qboolean gl_program_support;
 extern qboolean gl_msaa_support;
 extern qboolean gl_blit_support;
-extern qboolean gl_csaa_support;
 extern qboolean gl_float_buffer_support;
 extern qboolean gl_s3tc_compression_support;
 
 extern int gl_max_texture_size;
 extern float gl_max_ansio;
-extern float gl_force_ansio;
+extern float gl_force_ansio; 
+extern GLuint gl_color_format;
 extern int gl_msaa_samples;
-extern int gl_csaa_samples;
+extern cvar_t *r_msaa;
 
 extern int *gl_msaa_fbo;
 extern int *gl_backbuffer_fbo;
@@ -116,10 +111,7 @@ extern qboolean *mtexenabled;
 extern int glwidth;
 extern int glheight;
 
-extern qboolean bDoMSAAFBO;
-extern qboolean bDoScaledFBO;
-extern qboolean bDoDirectBlit;
-extern qboolean bDoHDR;
+extern qboolean bDoMSAA;
 extern qboolean bNoStretchAspect;
 
 extern FBO_Container_t s_MSAAFBO;
@@ -134,7 +126,6 @@ extern FBO_Container_t s_BrightAccumFBO;
 extern FBO_Container_t s_ToneMapFBO;
 extern FBO_Container_t s_DepthLinearFBO;
 extern FBO_Container_t s_HBAOCalcFBO;
-//extern FBO_Container_t s_CloakFBO;
 extern FBO_Container_t s_ShadowFBO;
 extern FBO_Container_t s_WaterFBO;
 
@@ -221,7 +212,6 @@ void R_RenderView(void);
 void R_RenderScene(void);
 void R_RenderView_SvEngine(int a1);
 qboolean R_CullBox(vec3_t mins, vec3_t maxs);
-void R_RotateForEntity(vec_t *origin, cl_entity_t *e);
 void R_Clear(void);
 void R_ForceCVars(qboolean mp);
 void R_NewMap(void);
@@ -245,6 +235,7 @@ void R_DrawSequentialPoly(msurface_t *s, int face);
 void R_BlendLightmaps(void);
 void R_RenderBrushPoly(msurface_t *fa);
 void R_RotateForEntity(float *origin, cl_entity_t *ent);
+void R_SetRenderMode(cl_entity_t *pEntity);
 float *R_GetAttachmentPoint(int entity, int attachment);
 void R_DrawBrushModel(cl_entity_t *entity);
 void R_DrawSpriteModel(cl_entity_t *entity);
@@ -276,6 +267,7 @@ void Draw_MiptexTexture(cachewad_t *wad, byte *data);
 void Draw_UpdateAnsios(void);
 void Draw_Init(void);
 void EmitWaterPolys(msurface_t *fa, int direction);
+void R_DecalShootInternal(texture_t *ptexture, int index, int entity, int modelIndex, vec3_t position, int flags, float flScale);
 void MYgluPerspective(GLdouble fovy, GLdouble aspect, GLdouble zNear, GLdouble zFar);
 void R_SetCustomFrustum(float *org, float *vpn2, float *vright2, float *vup2, float fov);
 float CalcFov(float fov_x, float width, float height);
@@ -283,7 +275,6 @@ int SignbitsForPlane(mplane_t *out);
 qboolean R_ParseVectorCvar(cvar_t *a1, float *vec);
 void R_ForceCVars(qboolean mp);
 colorVec R_LightPoint(vec3_t p);
-void R_GetViewOrigin(float *vieworg);
 refdef_t *R_GetRefDef(void);
 int R_GetDrawPass(void);
 GLuint GL_GenTextureRGBA8(int w, int h);
@@ -296,6 +287,12 @@ void GL_UploadTextureColorFormat(int texid, int w, int h, int iInternalFormat);
 
 GLuint GL_GenShadowTexture(int w, int h);
 void GL_UploadShadowTexture(int texid, int w, int h);
+
+void GL_GenFrameBuffer(FBO_Container_t *s);
+void GL_FrameBufferColorTexture(FBO_Container_t *s, GLuint iInternalFormat, qboolean multisample);
+void GL_FrameBufferDepthTexture(FBO_Container_t *s, GLuint iInternalFormat, qboolean multisample);
+void GL_FrameBufferColorTextureHBAO(FBO_Container_t *s);
+void GL_FrameBufferColorTextureDeferred(FBO_Container_t *s, int iInternalColorFormat);
 
 gltexture_t *R_GetCurrentGLTexture(void);
 int GL_LoadTextureEx(const char *identifier, GL_TEXTURETYPE textureType, int width, int height, byte *data, qboolean mipmap, qboolean ansio);
@@ -330,13 +327,14 @@ void CL_ScreenShot_f(void);
 
 //for hud or post-processing
 void R_InitGLHUD(void);
+bool R_UseMSAA(void);
 
 extern mplane_t custom_frustum[4];
-extern float r_identity_matrix[16];
-
-extern float r_rotate_entity_matrix[16];
+extern float r_identity_matrix[4][4];
+extern float r_rotate_entity_matrix[4][4];
 extern bool r_rotate_entity;
 
 extern qboolean g_SvEngine_DrawPortalView;
+extern int r_draw_pass;
 
 #define BUFFER_OFFSET(i) ((unsigned int *)NULL + (i))

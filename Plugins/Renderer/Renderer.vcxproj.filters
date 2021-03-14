@@ -17,9 +17,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="cJSON.c">
-      <Filter>Source</Filter>
-    </ClCompile>
     <ClCompile Include="command.cpp">
       <Filter>Source</Filter>
     </ClCompile>
@@ -88,9 +85,6 @@
     <ClInclude Include="bspfile.h">
       <Filter>Header</Filter>
     </ClInclude>
-    <ClInclude Include="cJSON.h">
-      <Filter>Header</Filter>
-    </ClInclude>
     <ClInclude Include="command.h">
       <Filter>Header</Filter>
     </ClInclude>
@@ -98,9 +92,6 @@
       <Filter>Header</Filter>
     </ClInclude>
     <ClInclude Include="exportfuncs.h">
-      <Filter>Header</Filter>
-    </ClInclude>
-    <ClInclude Include="gl_3dsky.h">
       <Filter>Header</Filter>
     </ClInclude>
     <ClInclude Include="gl_draw.h">
@@ -112,9 +103,6 @@
     <ClInclude Include="gl_local.h">
       <Filter>Header</Filter>
     </ClInclude>
-    <ClInclude Include="gl_model.h">
-      <Filter>Header</Filter>
-    </ClInclude>
     <ClInclude Include="gl_shader.h">
       <Filter>Header</Filter>
     </ClInclude>
@@ -122,9 +110,6 @@
       <Filter>Header</Filter>
     </ClInclude>
     <ClInclude Include="gl_studio.h">
-      <Filter>Header</Filter>
-    </ClInclude>
-    <ClInclude Include="gl_util.h">
       <Filter>Header</Filter>
     </ClInclude>
     <ClInclude Include="gl_warp_sin.h">
@@ -153,9 +138,6 @@
     </ClInclude>
     <ClInclude Include="zone.h">
       <Filter>Header</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\src\Interface\IRenderer.h">
-      <Filter>Interface</Filter>
     </ClInclude>
     <ClInclude Include="ref_int_internal.h">
       <Filter>Interface</Filter>

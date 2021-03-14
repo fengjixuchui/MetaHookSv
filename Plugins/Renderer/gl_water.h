@@ -34,6 +34,7 @@ typedef struct r_water_s
 	GLuint depthreflmap;
 
 	vec3_t vecs;
+	vec3_t norm;
 	float distances;
 	cl_entity_t *ent;
 	vec3_t org;
@@ -49,8 +50,6 @@ typedef struct r_water_s
 
 //renderer
 extern vec3_t water_view;
-extern qboolean drawreflect;
-extern qboolean drawrefract;
 
 //water
 extern r_water_t *curwater;
@@ -62,10 +61,6 @@ extern int water_normalmap;
 
 extern SHADER_DEFINE(drawdepth);
 
-//water fog
-extern int *g_bUserFogOn;
-extern int save_userfogon;
-
 //cvar
 extern cvar_t *r_water;
 extern cvar_t *r_water_debug;
@@ -73,7 +68,6 @@ extern cvar_t *r_water_fresnel;
 extern cvar_t *r_water_depthfactor;
 extern cvar_t *r_water_normfactor;
 extern cvar_t *r_water_novis;
-extern cvar_t *r_water_texscale;
 extern cvar_t *r_water_minheight;
 
 typedef struct
@@ -85,12 +79,11 @@ typedef struct
 extern colorVec *gWaterColor;
 extern cshift_t *cshift_water;
 
-r_water_t *R_GetActiveWater(cl_entity_t *ent, vec3_t p, colorVec *color);
+r_water_t *R_GetActiveWater(cl_entity_t *ent, vec3_t p, vec3_t n, colorVec *color);
 void R_InitWater(void);
 void R_FreeWater(void);
 void R_ClearWater(void);
 void R_RenderWaterView(void);
-void R_EnableClip(qboolean isdrawworld);
 void R_FreeDeadWaters(void);
 void R_UseWaterProgram(int state, water_program_t *progOutput);
 
