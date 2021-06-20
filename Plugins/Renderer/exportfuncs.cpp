@@ -201,7 +201,7 @@ void HUD_DrawNormalTriangles(void)
 		R_RenderShadowScenes();
 	}
 
-	if (!r_refdef->onlyClientDraws)
+	if (!r_refdef->onlyClientDraws && !g_SvEngine_DrawPortalView && !r_draw_pass)
 	{
 		if (R_UseMSAA())
 		{
@@ -221,10 +221,25 @@ void HUD_DrawNormalTriangles(void)
 
 	//Allow SCClient to write stencil buffer (but not bit 1)?
 
+	if (gl_polyoffset && gl_polyoffset->value)
+	{
+		qglEnable(GL_POLYGON_OFFSET_FILL);
+
+		if (gl_ztrick && gl_ztrick->value)
+			qglPolygonOffset(1, gl_polyoffset->value);
+		else
+			qglPolygonOffset(-1, -gl_polyoffset->value);
+	}
+
 	qglStencilMask(0xFF);
 	qglClear(GL_STENCIL_BUFFER_BIT);
 	gExportfuncs.HUD_DrawNormalTriangles();
 	qglStencilMask(0);
+
+	if (gl_polyoffset && gl_polyoffset->value)
+	{
+		qglDisable(GL_POLYGON_OFFSET_FILL);
+	}
 
 	//Restore current framebuffer just in case that Sven-Coop client changes it
 	
@@ -243,15 +258,6 @@ void HUD_DrawNormalTriangles(void)
 
 void HUD_DrawTransparentTriangles(void)
 {
-	if (!r_draw_pass)
-	{
-		R_FreeDeadWaters();
-		for (r_water_t *water = waters_active; water; water = water->next)
-		{
-			water->free = true;
-		}
-	}
-
 	gExportfuncs.HUD_DrawTransparentTriangles();
 }
 
@@ -271,10 +277,10 @@ int HUD_Redraw(float time, int intermission)
 			debugTextureID = waters_active->reflectmap;
 			break;
 		case 2:
-			debugTextureID = waters_active->refractmap;
+			debugTextureID = refractmap;
 			break;
 		case 3:
-			debugTextureID = waters_active->depthrefrmap;
+			debugTextureID = depthrefrmap;
 			qglUseProgramObjectARB(drawdepth.program);
 			break;
 		case 4:
@@ -574,7 +580,6 @@ int HUD_GetStudioModelInterface(int version, struct r_studio_interface_s **ppint
 	InstallHook(studioapi_SetupRenderer);
 	InstallHook(studioapi_RestoreRenderer);
 	InstallHook(studioapi_StudioDynamicLight);
-	//InstallHook(studioapi_SetupModel);
 
 	cl_sprite_white = IEngineStudio.Mod_ForName("sprites/white.spr", 1);
 

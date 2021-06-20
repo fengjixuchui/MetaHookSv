@@ -176,6 +176,9 @@ bool R_StudioRestoreBones(void)
 	if (!r_studio_cache_bone->value)
 		return false;
 
+	if (g_SvEngine_DrawPortalView)
+		return false;
+
 	auto ent = (*currententity);
 
 	studio_bone_t *b = NULL;
@@ -201,6 +204,9 @@ bool R_StudioRestoreBones(void)
 void R_StudioSaveBones(void)
 {
 	if (!r_studio_cache_bone->value)
+		return;
+
+	if (g_SvEngine_DrawPortalView)
 		return;
 
 	auto ent = (*currententity);
@@ -676,7 +682,7 @@ void R_GLStudioDrawPoints(void)
 				StudioProgramState |= STUDIO_TRANSPARENT_ENABLED | STUDIO_NF_ADDITIVE | STUDIO_TRANSADDITIVE_ENABLED;
 			}
 
-			if (r_wsurf_fogmode == GL_LINEAR)
+			if (r_fog_mode == GL_LINEAR)
 				StudioProgramState |= STUDIO_LINEAR_FOG_ENABLED;
 
 			R_UseGBufferProgram(GBufferProgramState);
@@ -1100,7 +1106,7 @@ void R_GLStudioDrawPoints(void)
 			if (iInitVBO & 2)
 			{
 				//Convert vTri into indices
-				for (int t = 0; t < VBOMesh->vTri.size(); ++t)
+				for (size_t t = 0; t < VBOMesh->vTri.size(); ++t)
 				{
 					auto &tri = VBOMesh->vTri[t];
 					if (tri.draw_type == GL_TRIANGLE_STRIP)

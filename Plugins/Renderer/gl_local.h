@@ -28,7 +28,6 @@
 #include "gl_wsurf.h"
 #include "gl_draw.h"
 
-
 extern refdef_t *r_refdef;
 extern ref_params_t r_params;
 
@@ -61,6 +60,7 @@ extern vec_t *r_origin;
 extern vec_t *modelorg;
 extern vec_t *r_entorigin;
 extern float *r_world_matrix;
+extern float *r_projection_matrix;
 
 extern int *r_framecount;
 extern int *r_visframecount;
@@ -78,6 +78,7 @@ extern int *cl_weaponsequence;
 extern int *cl_light_level;
 extern int *c_alias_polys;
 extern int *c_brush_polys;
+extern int(*rtable)[20][20];
 
 //fog
 extern int *g_bUserFogOn;
@@ -97,7 +98,6 @@ extern qboolean gl_s3tc_compression_support;
 
 extern int gl_max_texture_size;
 extern float gl_max_ansio;
-extern float gl_force_ansio; 
 extern GLuint gl_color_format;
 extern int gl_msaa_samples;
 extern cvar_t *r_msaa;
@@ -108,6 +108,8 @@ extern int *gl_mtexable;
 
 extern qboolean *mtexenabled;
 
+extern int glx;
+extern int gly;
 extern int glwidth;
 extern int glheight;
 
@@ -136,8 +138,6 @@ extern msurface_t **waterchain;
 extern int *gl_texsort_value;
 
 extern int *gSkyTexNumber;
-extern skybox_t *skymins;
-extern skybox_t *skymaxs;
 
 extern float gldepthmin;
 extern float gldepthmax;
@@ -226,9 +226,9 @@ void R_MarkLeaves(void);
 void R_SetFrustum(void);
 void R_CalcRefdef(struct ref_params_s *pparams);
 void R_DrawWorld(void);
-void R_DrawSkyChain(msurface_t *s);
-void R_ClearSkyBox(void);
 void R_DrawSkyBox(void);
+void R_ClearSkyBox(void);
+void R_DrawSkyChain(void);
 void R_DrawEntitiesOnList(void);
 void R_RecursiveWorldNode(mnode_t *node);
 void R_DrawSequentialPoly(msurface_t *s, int face);
@@ -264,7 +264,6 @@ void GL_InitShaders(void);
 void GL_FreeShaders(void);
 texture_t *Draw_DecalTexture(int index);
 void Draw_MiptexTexture(cachewad_t *wad, byte *data);
-void Draw_UpdateAnsios(void);
 void Draw_Init(void);
 void EmitWaterPolys(msurface_t *fa, int direction);
 void R_DecalShootInternal(texture_t *ptexture, int index, int entity, int modelIndex, vec3_t position, int flags, float flScale);
@@ -321,6 +320,10 @@ void GL_PopMatrix(void);
 void GL_PushDrawState(void);
 void GL_PopDrawState(void);
 
+void GL_Begin2D(void);
+void GL_Begin2DEx(int width, int height);
+void GL_End2D(void);
+
 //for screenshot
 byte *R_GetSCRCaptureBuffer(int *bufsize);
 void CL_ScreenShot_f(void);
@@ -329,6 +332,7 @@ void CL_ScreenShot_f(void);
 void R_InitGLHUD(void);
 bool R_UseMSAA(void);
 
+extern GLint r_viewport[4];
 extern mplane_t custom_frustum[4];
 extern float r_identity_matrix[4][4];
 extern float r_rotate_entity_matrix[4][4];

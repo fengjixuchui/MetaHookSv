@@ -24,7 +24,7 @@ Use a separate account to play Sven-Coop if you worry about getting banned, sinc
 
 * The new "svencoop.exe" is renamed from "metahook.exe", you could run game from "metahook.exe -game svencoop" however it will cause game crash when changing video settings.
 
-* The SDL2.dll fixes a bug that the original SDL's IME input handler was causing buffer overflow and game crash. you don't need to copy it if you don't have a non-english IME.
+* The SDL2.dll fixes a bug that the IME input handler from original SDL library provided by valve was causing buffer overflow and game crash when using non-english IME. you don't need to copy it if you don't have a non-english IME.
 
 ## Build Instruction
 
@@ -104,7 +104,7 @@ You can even play with 200k epolys models and still keep a high framerate.
 
 3. Simple Per-Object Shadow. (Warning: this may cause a significant performance hit.)
 
-4. Screen Space Ambient Occlusion (SSAO) using horizon-based ambient occlusion (HBAO). the implementation is taken from nvidia. (Warning: this may cause a significant performance hit when sampling radius is too large.)
+4. Screen Space Ambient Occlusion (SSAO) using horizon-based ambient occlusion (HBAO). the implementation is taken from nvidia. (Warning: this may cause a significant performance hit when sampling radius is too large.) (Warning: you might see SSAO's black pixel fighting on wall or terrain if your defalt_fov is not 90)
 
 5. MultiSampling Anti-Aliasing (MSAA) (High quality, low performance)
 
@@ -164,6 +164,8 @@ r_shadow_low_scale : scale factor when render shadow-caster entity in medium qua
 
 r_ssao 1 / 0 : enable or disable Screen Space Ambient Occlusion (SSAO). recommended value : 1
 
+(Warning: you might see SSAO's black pixel fighting on wall or terrain if your defalt_fov is not 90. you have to either turn SSAO off or change default_fov back to 90)
+
 r_ssao_intensity : control the intensity of SSAO shadow. recommended value : 0.6 ~ 1.0
 
 r_ssao_radius : control the sample size of SSAO shadow. recommended value : 30.0 ~ 100.0
@@ -190,7 +192,9 @@ r_studio_vbo 1 / 0 : enable or disable VBO batch-optmization draw for studio mod
 
 r_wsurf_vbo 1 / 0 : enable or disable VBO batch-optmization draw for BSP terrain. recommended value : 1
 
-r_wsurf_parallax_scale : control parallax textures' intensity factor. recommended value : 0.01 ~ 0.04
+r_wsurf_parallax_scale : control parallax textures' intensity factor. recommended value : 0.01 ~ 0.03
+
+r_wsurf_detail 1 / 0 : enable or disable detail textures, normal textures, parallax textures. recommended value : 1
 
 r_fxaa 1 / 0 : enable or disable Fast Approximate Anti-Aliasing (FXAA). recommended value : 1
 

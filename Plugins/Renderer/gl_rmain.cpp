@@ -27,6 +27,7 @@ int *maxTransObjs;
 transObjRef **transObjects;
 
 float scr_fov_value;
+GLint r_viewport[4];
 
 mplane_t custom_frustum[4];
 mplane_t *frustum;
@@ -41,6 +42,7 @@ vec_t *r_origin;
 vec_t *modelorg;
 vec_t *r_entorigin;
 float *r_world_matrix;
+float *r_projection_matrix;
 
 int *g_bUserFogOn;
 float *g_UserFogColor;
@@ -64,10 +66,10 @@ int *cl_weaponsequence;
 int *cl_light_level;
 int *c_alias_polys;
 int *c_brush_polys;
+int(*rtable)[20][20];
 
 int gl_max_texture_size = 0;
 float gl_max_ansio = 0;
-float gl_force_ansio = 0;
 GLuint gl_color_format = 0;
 int gl_msaa_samples = 0;
 cvar_t *r_msaa = NULL;
@@ -267,8 +269,11 @@ void R_RotateForEntity(vec_t *origin, cl_entity_t *e)
 
 void R_DrawSpriteModel(cl_entity_t *entity)
 {
-	R_UseGBufferProgram(GBUFFER_DIFFUSE_ENABLED | GBUFFER_TRANSPARENT_ENABLED);
-	R_SetGBufferMask(GBUFFER_MASK_ALL);
+	if (drawgbuffer)
+	{
+		R_AddTEntity(entity);
+		return;
+	}
 
 	gRefFuncs.R_DrawSpriteModel(entity);
 }
@@ -1003,10 +1008,7 @@ void R_SetupGL(void)
 {
 	gRefFuncs.R_SetupGL();
 
-	/*if ((r_draw_pass == r_draw_reflect || r_draw_pass == r_draw_refract) && curwater)
-	{
-		qglViewport(0, 0, curwater->texwidth, curwater->texheight);
-	}*/
+	qglGetIntegerv(GL_VIEWPORT, r_viewport);
 }
 
 void R_CalcRefdef(struct ref_params_s *pparams)
@@ -1067,7 +1069,7 @@ bool GL_IsValidSampleCount(int msaa_samples)
 
 bool R_UseMSAA(void)
 {
-	return s_MSAAFBO.s_hBackBufferFBO && GL_IsValidSampleCount((int)r_msaa->value);
+	return s_MSAAFBO.s_hBackBufferFBO && GL_IsValidSampleCount((int)r_msaa->value) && !g_SvEngine_DrawPortalView;
 }
 
 void GL_GenerateFBO(void)
@@ -1094,6 +1096,8 @@ void GL_GenerateFBO(void)
 	GL_ClearFBO(&s_ToneMapFBO);
 	GL_ClearFBO(&s_DepthLinearFBO);
 	GL_ClearFBO(&s_HBAOCalcFBO);
+	GL_ClearFBO(&s_WaterFBO);
+	GL_ClearFBO(&s_ShadowFBO);
 
 	if (!gl_msaa_support)
 	{
@@ -1413,16 +1417,29 @@ void GL_BeginRendering(int *x, int *y, int *width, int *height)
 			GL_FrameBufferDepthTexture(&s_MSAAFBO, GL_DEPTH24_STENCIL8, true);
 		}
 	}
-
-	r_studio_framecount ++;
 }
 
 void R_PreRenderView(int a1)
 {
 	g_SvEngine_DrawPortalView = a1;
 
+	r_studio_framecount++;
+	r_fog_mode = 0;
+
 	if (!r_refdef->onlyClientDraws)
 	{
+		if (qglIsEnabled(GL_FOG))
+		{
+			qglGetIntegerv(GL_FOG_MODE, &r_fog_mode);
+
+			if (r_fog_mode == GL_LINEAR)
+			{
+				qglGetFloatv(GL_FOG_START, &r_fog_control[0]);
+				qglGetFloatv(GL_FOG_END, &r_fog_control[1]);
+				qglGetFloatv(GL_FOG_COLOR, r_fog_color);
+			}
+		}
+
 		if (r_water && r_water->value && waters_active)
 		{
 			R_RenderWaterView();
@@ -1441,6 +1458,15 @@ void R_PreRenderView(int a1)
 
 void R_PostRenderView()
 {
+	if (!r_draw_pass && !g_SvEngine_DrawPortalView)
+	{
+		R_FreeDeadWaters();
+		for (r_water_t *water = waters_active; water; water = water->next)
+		{
+			water->free = true;
+		}
+	}
+
 	if (R_UseMSAA())
 	{
 		qglBindFramebufferEXT(GL_DRAW_FRAMEBUFFER, s_BackBufferFBO.s_hBackBufferFBO);
@@ -1452,8 +1478,13 @@ void R_PostRenderView()
 	else
 	{
 		R_DoFXAA();
+
 		R_DoHDR();
 	}
+
+	GL_DisableMultitexture();
+	qglEnable(GL_TEXTURE_2D);
+	qglColor4f(1, 1, 1, 1);
 
 	qglBindFramebufferEXT(GL_FRAMEBUFFER, s_BackBufferFBO.s_hBackBufferFBO);
 
@@ -1749,18 +1780,6 @@ void R_InitCvars(void)
 	if (!gl_ansio)
 		gl_ansio = gEngfuncs.pfnRegisterVariable("gl_ansio", "1", FCVAR_CLIENTDLL | FCVAR_ARCHIVE);
 
-	const char *s_ansio;
-	gl_force_ansio = 0;
-	if(g_pInterface->CommandLine->CheckParm("-ansio", &s_ansio))
-	{
-		gl_force_ansio = gl_max_ansio;
-		if(s_ansio && s_ansio[0] && s_ansio[0] >= '0' && s_ansio[0] <= '9')
-		{
-			float f_ansio = atof(s_ansio);
-			gl_force_ansio = max(min(f_ansio, gl_max_ansio), 1);
-		}
-	}
-
 	v_texgamma = gEngfuncs.pfnGetCvarPointer("texgamma");
 	v_lightgamma = gEngfuncs.pfnGetCvarPointer("lightgamma");
 	v_brightness = gEngfuncs.pfnGetCvarPointer("brightness");
@@ -1822,7 +1841,7 @@ void R_NewMap(void)
 
 mleaf_t *Mod_PointInLeaf(vec3_t p, model_t *model)
 {
-	if ((r_draw_pass == r_draw_reflect || r_draw_pass == r_draw_refract) && model == r_worldmodel && 0 == VectorCompare(p, r_refdef->vieworg))
+	if (r_draw_pass == r_draw_reflect && model == r_worldmodel && VectorCompare(p, r_refdef->vieworg))
 	{
 		return gRefFuncs.Mod_PointInLeaf(water_view, model);
 	}

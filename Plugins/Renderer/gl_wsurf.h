@@ -54,13 +54,19 @@ typedef struct brushface_s
 	vec3_t	t_tangent;
 }brushface_t;
 
+//#define TEXCHAIN_SKY 0
+#define TEXCHAIN_STATIC 1
+#define TEXCHAIN_SCROLL 2
+#define TEXCHAIN_RANDOM 3
+#define TEXCHAIN_ANIMATION 4
+
 typedef struct brushtexchain_s
 {
 	int iStartIndex;
 	int iVertexCount;
 	int iFaceCount;
 	texture_t *pTexture;
-	int iScroll;
+	int iType;
 }brushtexchain_t;
 
 typedef struct epair_s
@@ -77,9 +83,11 @@ typedef struct
    char		*classname;
 }bspentity_t;
 
-#define WSURF_DETAIL_TEXTURE 0
-#define WSURF_NORMAL_TEXTURE 1
-#define WSURF_PARALLAX_TEXTURE 2
+#define WSURF_REPLACE_TEXTURE		0
+#define WSURF_DETAIL_TEXTURE		1
+#define WSURF_NORMAL_TEXTURE		2
+#define WSURF_PARALLAX_TEXTURE		3
+#define WSURF_MAX_TEXTURE			4
 
 typedef struct detail_texture_s
 {
@@ -99,7 +107,7 @@ typedef struct detail_texture_s
 typedef struct detail_texture_cache_s
 {
 	std::string basetexture;
-	detail_texture_t tex[3];
+	detail_texture_t tex[WSURF_MAX_TEXTURE];
 }detail_texture_cache_t;
 
 typedef struct wsurf_model_s
@@ -113,6 +121,7 @@ typedef struct wsurf_model_s
 
 	std::vector<brushtexchain_t> vTextureChainStatic;
 	std::vector<brushtexchain_t> vTextureChainScroll;
+	std::vector<brushtexchain_t> vTextureChainAnim;
 	std::vector<unsigned int> vIndicesBuffer;
 
 }wsurf_model_t;
@@ -194,9 +203,9 @@ typedef struct
 extern r_worldsurf_t	r_wsurf;
 extern int r_wsurf_drawcall;
 extern int r_wsurf_polys;
-extern int r_wsurf_fogmode;
-extern float r_wsurf_fogcontrol[2];
-extern float r_wsurf_fogcolor[4];
+extern int r_fog_mode;
+extern float r_fog_control[2];
+extern float r_fog_color[4];
 
 void R_InitWSurf(void);
 void R_VidInitWSurf(void);
@@ -241,6 +250,8 @@ void R_DrawWSurfVBO(wsurf_model_t *modcache);
 void R_EnableWSurfVBOSolid(wsurf_model_t *modcache);
 void R_DrawWSurfVBOSolid(wsurf_model_t *modcache);
 void R_ShutdownWSurf(void);
+
+wsurf_program_t *R_UseWSurfProgram(int state);
 
 #define WSURF_DIFFUSE_ENABLED			1
 #define WSURF_LIGHTMAP_ENABLED			2
