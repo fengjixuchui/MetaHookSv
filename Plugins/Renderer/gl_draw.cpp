@@ -16,7 +16,6 @@ GLenum TEXTURE3_SGIS;
 float current_ansio = -1.0;
 
 static byte texloader_buffer[4096 * 4096 * 4];
-static byte scaled_buffer[1024 * 1024 * 4];
 
 gltexture_t *gltextures = NULL;
 gltexture_t **gltextures_SvEngine = NULL;//for SvEngine
@@ -396,7 +395,7 @@ tryagain:
 
 int GL_LoadTexture2(char *identifier, GL_TEXTURETYPE textureType, int width, int height, byte *data, qboolean mipmap, int iType, byte *pPal, int filter)
 {
-	int texnum = GL_AllocTexture((char *)identifier, textureType, width, height, mipmap);
+	/*int texnum = GL_AllocTexture((char *)identifier, textureType, width, height, mipmap);
 
 	if(!texnum)
 		return 0;
@@ -411,9 +410,14 @@ int GL_LoadTexture2(char *identifier, GL_TEXTURETYPE textureType, int width, int
 	else
 		GL_Upload16( data, width, height, mipmap, iType, pPal, ansio );
 
-	return texnum;
+	return texnum;*/
 
-	//return gRefFuncs.GL_LoadTexture2(identifier, textureType, width, height, data, mipmap, iType, pPal, filter);
+	if (textureType == GLT_STUDIO && iType == TEX_TYPE_NONE && pPal == tmp_palette)
+	{
+		iType = TEX_TYPE_ALPHA;
+	}
+
+	return gRefFuncs.GL_LoadTexture2(identifier, textureType, width, height, data, mipmap, iType, pPal, filter);
 }
 
 void GL_UploadDXT(byte *data, int width, int height, qboolean mipmap, qboolean ansio)
@@ -483,18 +487,7 @@ texture_t *Draw_DecalTexture(int index)
 	if(index < 0)
 		return t;
 
-	//if(t->anim_next && r_wsurf_decal->value)
-	//	return t->anim_next;
-
 	return t;
-}
-
-void Draw_MiptexTexture(cachewad_t *wad, byte *data)
-{
-	gRefFuncs.Draw_MiptexTexture(wad, data);
-
-	//texture_t *t = (texture_t *)data;
-	//R_LinkDecalTexture(t);
 }
 
 DWORD ByteToUInt( byte *byte )

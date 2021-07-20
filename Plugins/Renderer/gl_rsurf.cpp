@@ -3,7 +3,6 @@
 
 msurface_t **skychain = NULL;
 msurface_t **waterchain = NULL;
-int *gl_texsort_value = NULL;
 
 //engine
 byte *lightmaps;
@@ -18,10 +17,6 @@ int *gDecalSurfCount;
 msurface_t **gDecalSurfs;
 decal_t *gDecalPool;
 decalcache_t *gDecalCache;
-int *skytexturenum;
-int *r_detail_texid;
-float *r_detail_texcoord;
-float *r_polygon_offset;
 
 void R_RecursiveWorldNode(mnode_t *node)
 {
@@ -677,12 +672,11 @@ void R_DrawDecals(qboolean bMultitexture)
 		WSurfProgramState |= WSURF_GBUFFER_ENABLED;
 	}
 
-	auto prog = R_UseWSurfProgram(WSurfProgramState);
-
-	if (prog->speed != -1)
-	{
-		qglUniform1fARB(prog->speed, 0);
-	}
+	wsurf_program_t prog = {0};
+	R_UseWSurfProgram(WSurfProgramState, &prog);
+	
+	if(prog.speed != -1)
+		qglUniform1fARB(prog.speed, 0);
 
 	qglEnable(GL_BLEND);
 	qglEnable(GL_ALPHA_TEST);

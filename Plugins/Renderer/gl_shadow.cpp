@@ -103,6 +103,9 @@ void R_InitShadow(void)
 	r_shadow_low_scale = gEngfuncs.pfnRegisterVariable("r_shadow_low_scale", "0.5", FCVAR_ARCHIVE | FCVAR_CLIENTDLL);
 }
 
+#define PhyCorpseFlag1 (753951)
+#define PhyCorpseFlag2 (152359)
+
 qboolean R_ShouldCastShadow(cl_entity_t *ent)
 {
 	if(!ent)
@@ -116,6 +119,10 @@ qboolean R_ShouldCastShadow(cl_entity_t *ent)
 
 	if (ent->model->type == mod_studio)
 	{
+		if (ent->curstate.iuser3 == PhyCorpseFlag1 && ent->curstate.iuser4 == PhyCorpseFlag2)
+		{
+			return true;
+		}
 		if (ent->index == 0)
 			return false;
 		if (ent->curstate.movetype == MOVETYPE_NONE)
@@ -289,12 +296,6 @@ void R_RenderShadowMap(void)
 		}
 
 		(*currententity) = backup_curentity;
-
-		if (!s_BackBufferFBO.s_hBackBufferFBO)
-		{
-			qglBindTexture(GL_TEXTURE_2D, shadowmapArray[i]);
-			qglCopyTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, 0, 0, texsizeArray[i], texsizeArray[i], 0);
-		}
 
 		qglColorMask(1, 1, 1, 1);
 	}
@@ -486,7 +487,7 @@ void R_DrawBrushModelShadow(cl_entity_t *e)
 
 		R_EnableWSurfVBO(modcache);
 
-		R_DrawWSurfVBO(modcache);
+		R_DrawWSurfVBOSolid(modcache);
 
 		R_EnableWSurfVBO(NULL);
 	}
@@ -532,11 +533,6 @@ void R_DrawEntitiesOnListShadow(void)
 	for (i = 0; i < numvisedicts; i++)
 	{
 		(*currententity) = cl_visedicts[i];
-
-		if ((*currententity)->curstate.rendermode != kRenderNormal)
-		{
-			continue;
-		}
 
 		switch ((*currententity)->model->type)
 		{

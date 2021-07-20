@@ -1,2 +1,4 @@
-captionmod.dll
-renderer.dll
+CaptionMod.dll
+Renderer.dll
+BulletPhysics.dll
+StudioEvents.dll

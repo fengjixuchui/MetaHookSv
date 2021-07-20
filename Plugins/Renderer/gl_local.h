@@ -44,12 +44,8 @@ extern RECT *window_rect;
 
 extern float *videowindowaspect;
 extern float *windowvideoaspect;
-extern float videowindowaspect_old;
-extern float windowvideoaspect_old;
 
 extern float scr_fov_value;
-extern mplane_t *frustum;
-extern mleaf_t **r_viewleaf, **r_oldviewleaf;
 
 extern float yfov;
 
@@ -65,7 +61,7 @@ extern float *r_projection_matrix;
 extern int *r_framecount;
 extern int *r_visframecount;
 
-extern frame_t *cl_frames;
+extern void *cl_frames;
 extern int size_of_frame;
 extern int *cl_parsecount;
 extern int *cl_waterlevel;
@@ -79,6 +75,7 @@ extern int *cl_light_level;
 extern int *c_alias_polys;
 extern int *c_brush_polys;
 extern int(*rtable)[20][20];
+extern void *tmp_palette;
 
 //fog
 extern int *g_bUserFogOn;
@@ -131,11 +128,8 @@ extern FBO_Container_t s_HBAOCalcFBO;
 extern FBO_Container_t s_ShadowFBO;
 extern FBO_Container_t s_WaterFBO;
 
-extern int *skytexturenum;
-
 extern msurface_t **skychain;
 extern msurface_t **waterchain;
-extern int *gl_texsort_value;
 
 extern int *gSkyTexNumber;
 
@@ -207,12 +201,10 @@ extern cvar_t *chase_active;
 
 void R_FillAddress(void);
 void R_InstallHook(void);
-void Cache_Free(cache_user_t *c);
 void R_RenderView(void);
 void R_RenderScene(void);
 void R_RenderView_SvEngine(int a1);
 qboolean R_CullBox(vec3_t mins, vec3_t maxs);
-void R_Clear(void);
 void R_ForceCVars(qboolean mp);
 void R_NewMap(void);
 void R_Init(void);
@@ -220,33 +212,24 @@ void R_VidInit(void);
 void R_Shutdown(void);
 void R_InitTextures(void);
 void R_FreeTextures(void);
-void R_SetFrustum(void);
 void R_SetupGL(void);
 void R_MarkLeaves(void);
-void R_SetFrustum(void);
 void R_CalcRefdef(struct ref_params_s *pparams);
 void R_DrawWorld(void);
 void R_DrawSkyBox(void);
 void R_ClearSkyBox(void);
-void R_DrawSkyChain(void);
-void R_DrawEntitiesOnList(void);
 void R_RecursiveWorldNode(mnode_t *node);
+void R_RecursiveWorldNodeVBO(mnode_t *node);
 void R_DrawSequentialPoly(msurface_t *s, int face);
-void R_BlendLightmaps(void);
-void R_RenderBrushPoly(msurface_t *fa);
 void R_RotateForEntity(float *origin, cl_entity_t *ent);
 void R_SetRenderMode(cl_entity_t *pEntity);
 float *R_GetAttachmentPoint(int entity, int attachment);
 void R_DrawBrushModel(cl_entity_t *entity);
 void R_DrawSpriteModel(cl_entity_t *entity);
-void R_GetSpriteAxes(cl_entity_t *entity, int type, float *vforwrad, float *vright, float *vup);
-void R_SpriteColor(mcolor24_t *col, cl_entity_t *entity, int renderamt);
 entity_state_t *R_GetPlayerState(int index);
-float GlowBlend(cl_entity_t *entity);
 int CL_FxBlend(cl_entity_t *entity);
 void R_DrawCurrentEntity(void);
 void R_DrawTEntitiesOnList(int onlyClientDraw);
-void R_AllocObjects(int nMax);
 void R_AddTEntity(cl_entity_t *pEnt);
 void GL_Shutdown(void);
 void GL_Init(void);
@@ -268,7 +251,6 @@ void Draw_Init(void);
 void EmitWaterPolys(msurface_t *fa, int direction);
 void R_DecalShootInternal(texture_t *ptexture, int index, int entity, int modelIndex, vec3_t position, int flags, float flScale);
 void MYgluPerspective(GLdouble fovy, GLdouble aspect, GLdouble zNear, GLdouble zFar);
-void R_SetCustomFrustum(float *org, float *vpn2, float *vright2, float *vup2, float fov);
 float CalcFov(float fov_x, float width, float height);
 int SignbitsForPlane(mplane_t *out);
 qboolean R_ParseVectorCvar(cvar_t *a1, float *vec);
@@ -333,12 +315,12 @@ void R_InitGLHUD(void);
 bool R_UseMSAA(void);
 
 extern GLint r_viewport[4];
-extern mplane_t custom_frustum[4];
 extern float r_identity_matrix[4][4];
 extern float r_rotate_entity_matrix[4][4];
 extern bool r_rotate_entity;
+extern bool r_draw_nontransparent;
 
-extern qboolean g_SvEngine_DrawPortalView;
+extern bool g_SvEngine_DrawPortalView;
 extern int r_draw_pass;
 
 #define BUFFER_OFFSET(i) ((unsigned int *)NULL + (i))

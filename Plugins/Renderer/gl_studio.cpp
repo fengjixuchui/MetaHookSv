@@ -14,9 +14,14 @@ std::unordered_map<int, studio_program_t> g_StudioProgramTable;
 model_t *cl_sprite_white;
 model_t *cl_shellchrome;
 mstudiomodel_t **psubmodel;
+mstudiobodyparts_t **pbodypart;
 studiohdr_t **pstudiohdr;
 model_t **r_model;
 float *r_blend;
+auxvert_t **pauxverts;
+float **pvlightvalues;
+auxvert_t (*auxverts)[MAXSTUDIOVERTS];
+vec3_t (*lightvalues)[MAXSTUDIOVERTS];
 float (*pbonetransform)[MAXSTUDIOBONES][3][4];
 float (*plighttransform)[MAXSTUDIOBONES][3][4];
 int (*g_NormalIndex)[MAXSTUDIOVERTS];
@@ -26,20 +31,20 @@ cl_entity_t *cl_viewent;
 int *g_ForcedFaceFlags;
 int *lightgammatable;
 float *g_ChromeOrigin;
-int *r_smodels_total;
 int *r_ambientlight;
 float *r_shadelight;
 vec3_t *r_blightvec;
 float *r_plightvec;
 float *r_colormix;
+void *tmp_palette;
+
 
 //renderer
 vec3_t r_studionormal[MAXSTUDIOVERTS];
 float lightpos[MAXSTUDIOVERTS][3][4];
-auxvert_t auxverts[MAXSTUDIOVERTS];
-vec3_t lightvalues[MAXSTUDIOVERTS];
-auxvert_t *pauxverts;
-float *pvlightvalues;
+//auxvert_t auxverts[MAXSTUDIOVERTS];
+//vec3_t lightvalues[MAXSTUDIOVERTS];
+
 int r_studio_drawcall;
 int r_studio_polys;
 int r_studio_framecount;
@@ -99,6 +104,9 @@ void R_UseStudioProgram(int state, studio_program_t *progOutput)
 
 		if (state & STUDIO_NF_ADDITIVE)
 			defs << "#define STUDIO_NF_ADDITIVE\n";
+
+		if (state & STUDIO_NF_MASKED)
+			defs << "#define STUDIO_NF_MASKED\n";
 
 		if (state & STUDIO_GBUFFER_ENABLED)
 			defs << "#define GBUFFER_ENABLED\n";
@@ -292,9 +300,6 @@ void BuildNormalIndexTable(void)
 
 studiohdr_t *R_LoadTextures(model_t *psubm)
 {
-	if (gRefFuncs.R_LoadTextures)
-		return gRefFuncs.R_LoadTextures(psubm);
-
 	model_t *texmodel;
 
 	if ((*pstudiohdr)->textureindex == 0)
@@ -321,9 +326,6 @@ studiohdr_t *R_LoadTextures(model_t *psubm)
 
 void BuildGlowShellVerts(vec3_t *pstudioverts, auxvert_t *paux)
 {
-	if (gRefFuncs.BuildGlowShellVerts)
-		return gRefFuncs.BuildGlowShellVerts(pstudioverts, paux);
-
 	int					i;
 	byte				*pvertbone;
 	vec3_t				*pstudionorms;
@@ -443,20 +445,30 @@ void R_GLStudioDrawPoints(void)
 	short *pskinref;
 	int flags;
 
-	qglEnable(GL_STENCIL_TEST);
-	qglStencilMask(0xFF);
-	qglStencilFunc(GL_ALWAYS, 1, 0xFF);
-	qglStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+	int stencilState = 1;
 
-	pvertbone = ((byte *)(*pstudiohdr) + (*psubmodel)->vertinfoindex);
-	pnormbone = ((byte *)(*pstudiohdr) + (*psubmodel)->norminfoindex);
+	if (r_draw_nontransparent)
+	{
+		qglEnable(GL_STENCIL_TEST);
+		qglStencilMask(0xFF);
+		qglStencilFunc(GL_ALWAYS, stencilState, 0xFF);
+		qglStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+	}
+
+	auto engine_pauxverts = (*pauxverts);
+	auto engine_pvlightvalues = (*pvlightvalues);
+	auto engine_pstudiohdr = (*pstudiohdr);
+	auto engine_psubmodel = (*psubmodel);
+
+	pvertbone = ((byte *)engine_pstudiohdr + engine_psubmodel->vertinfoindex);
+	pnormbone = ((byte *)engine_pstudiohdr + engine_psubmodel->norminfoindex);
 	ptexturehdr = R_LoadTextures(*r_model);
 	ptexture = (mstudiotexture_t *)((byte *)ptexturehdr + ptexturehdr->textureindex);
 
-	pmesh = (mstudiomesh_t *)((byte *)(*pstudiohdr) + (*psubmodel)->meshindex);
+	pmesh = (mstudiomesh_t *)((byte *)engine_pstudiohdr + engine_psubmodel->meshindex);
 
-	pstudioverts = (vec3_t *)((byte *)(*pstudiohdr) + (*psubmodel)->vertindex);
-	pstudionorms = (vec3_t *)((byte *)(*pstudiohdr) + (*psubmodel)->normindex);
+	pstudioverts = (vec3_t *)((byte *)engine_pstudiohdr + engine_psubmodel->vertindex);
+	pstudionorms = (vec3_t *)((byte *)engine_pstudiohdr + engine_psubmodel->normindex);
 
 	pskinref = (short *)((byte *)ptexturehdr + ptexturehdr->skinindex);
 
@@ -470,11 +482,11 @@ void R_GLStudioDrawPoints(void)
 
 	if (r_studio_vbo->value)
 	{
-		auto itor = g_StudioVBOTable.find((*pstudiohdr));
+		auto itor = g_StudioVBOTable.find(engine_pstudiohdr);
 		if (itor != g_StudioVBOTable.end())
 		{
 			VBOData = itor->second;
-			auto itor2 = VBOData->vSubmodel.find((*psubmodel));
+			auto itor2 = VBOData->vSubmodel.find(engine_psubmodel);
 			if (itor2 != VBOData->vSubmodel.end())
 			{
 				VBOSubmodel = itor2->second;
@@ -482,7 +494,7 @@ void R_GLStudioDrawPoints(void)
 			else
 			{
 				VBOSubmodel = new studio_vbo_submodel_t;
-				VBOData->vSubmodel[(*psubmodel)] = VBOSubmodel;
+				VBOData->vSubmodel[engine_psubmodel] = VBOSubmodel;
 				iInitVBO = 2;
 			}
 		}
@@ -490,16 +502,16 @@ void R_GLStudioDrawPoints(void)
 		{
 			VBOData = new studio_vbo_t;
 			VBOSubmodel = new studio_vbo_submodel_t;
-			VBOData->vSubmodel[(*psubmodel)] = VBOSubmodel;
+			VBOData->vSubmodel[engine_psubmodel] = VBOSubmodel;
 
-			g_StudioVBOTable[(*pstudiohdr)] = VBOData;
+			g_StudioVBOTable[engine_pstudiohdr] = VBOData;
 			iInitVBO = 3;
 		}
 	}
 
 	if (iInitVBO & 2)
 	{
-		VBOSubmodel->iNumMesh = (*psubmodel)->nummesh;
+		VBOSubmodel->iNumMesh = engine_psubmodel->nummesh;
 		VBOSubmodel->vMesh = new studio_vbo_mesh_t[VBOSubmodel->iNumMesh];
 	}
 
@@ -525,25 +537,25 @@ void R_GLStudioDrawPoints(void)
 		if ((*currententity)->curstate.renderfx == kRenderFxGlowShell)
 		{
 			BuildNormalIndexTable();
-			BuildGlowShellVerts(pstudioverts, pauxverts);
+			BuildGlowShellVerts(pstudioverts, engine_pauxverts);
 		}
 		else
 		{
-			for (i = 0; i < (*psubmodel)->numverts; i++)
+			for (i = 0; i < engine_psubmodel->numverts; i++)
 			{
-				av = &(pauxverts[i]);
+				av = &(engine_pauxverts[i]);
 				R_StudioTransformAuxVert(av, pvertbone[i], pstudioverts[i]);
 			}
 		}
 
-		for (i = 0; i < (*psubmodel)->numverts; i++)
+		for (i = 0; i < engine_psubmodel->numverts; i++)
 		{
 			R_LightStrength(pvertbone[i], pstudioverts[i], lightpos[i]);
 		}
 
-		lv = pvlightvalues;
+		lv = engine_pvlightvalues;
 
-		for (j = 0; j < (*psubmodel)->nummesh; j++)
+		for (j = 0; j < engine_psubmodel->nummesh; j++)
 		{
 			flags = ptexture[pskinref[pmesh[j].skinref]].flags | (*g_ForcedFaceFlags);
 
@@ -560,7 +572,7 @@ void R_GLStudioDrawPoints(void)
 
 					if (flags & STUDIO_NF_CHROME)
 					{
-						int m = (int)((char *)lv - (char *)pvlightvalues) / 12;
+						int m = (int)((char *)lv - (char *)engine_pvlightvalues) / 12;
 						gRefFuncs.R_StudioChrome((*chrome)[m], *pnormbone, *pstudionorms);
 					}
 				}
@@ -574,7 +586,7 @@ void R_GLStudioDrawPoints(void)
 
 					if (flags & STUDIO_NF_CHROME)
 					{
-						int m = (int)((char *)lv - (char *)pvlightvalues) / 12;
+						int m = (int)((char *)lv - (char *)engine_pvlightvalues) / 12;
 						gRefFuncs.R_StudioChrome((*chrome)[m], *pnormbone, *pstudionorms);
 					}
 
@@ -594,8 +606,8 @@ void R_GLStudioDrawPoints(void)
 		iFlippedVModel = 1;
 	}
 
-	pstudionorms = (vec3_t *)((byte *)(*pstudiohdr) + (*psubmodel)->normindex);
-	pnormbone = ((byte *)(*pstudiohdr) + (*psubmodel)->norminfoindex);
+	pstudionorms = (vec3_t *)((byte *)engine_pstudiohdr + engine_psubmodel->normindex);
+	pnormbone = ((byte *)engine_pstudiohdr + engine_psubmodel->norminfoindex);
 
 	if (!iInitVBO && VBOSubmodel && r_studio_vbo->value)
 	{
@@ -621,11 +633,11 @@ void R_GLStudioDrawPoints(void)
 		else
 			r_g3 = 0.125f - (v_brightness->value * v_brightness->value) * 0.075f;
 
-		for (j = 0; j < (*psubmodel)->nummesh; j++)
+		for (j = 0; j < engine_psubmodel->nummesh; j++)
 		{
 			auto &VBOMesh = VBOSubmodel->vMesh[j];
 
-			pmesh = (mstudiomesh_t *)((byte *)(*pstudiohdr) + (*psubmodel)->meshindex) + j;
+			pmesh = (mstudiomesh_t *)((byte *)engine_pstudiohdr + engine_psubmodel->meshindex) + j;
 
 			r_studio_polys += pmesh->numtris;
 
@@ -634,6 +646,26 @@ void R_GLStudioDrawPoints(void)
 			if (r_fullbright->value >= 2)
 			{
 				flags = flags & 0xFC;
+			}
+
+			if (r_draw_nontransparent)
+			{
+				if (flags & STUDIO_NF_FLATSHADE)
+				{
+					if (stencilState != 2)
+					{
+						stencilState = 2;
+						qglStencilFunc(GL_ALWAYS, stencilState, 0xFF);
+					}
+				}
+				else
+				{
+					if (stencilState != 1)
+					{
+						stencilState = 1;
+						qglStencilFunc(GL_ALWAYS, stencilState, 0xFF);
+					}
+				}
 			}
 
 			int GBufferProgramState = GBUFFER_DIFFUSE_ENABLED;
@@ -659,6 +691,9 @@ void R_GLStudioDrawPoints(void)
 				qglEnable(GL_ALPHA_TEST);
 				qglAlphaFunc(GL_GREATER, 0.5);
 				qglDepthMask(GL_TRUE);
+
+				//GBufferProgramState |= GBUFFER_MASKED_ENABLED;
+				//StudioProgramState |= STUDIO_NF_MASKED;
 			}
 			else if ((flags & STUDIO_NF_ADDITIVE) && (*currententity)->curstate.rendermode == kRenderNormal)
 			{
@@ -795,11 +830,11 @@ void R_GLStudioDrawPoints(void)
 	}
 	else
 	{
-		for (j = 0; j < (*psubmodel)->nummesh; j++)
+		for (j = 0; j < engine_psubmodel->nummesh; j++)
 		{
-			pmesh = (mstudiomesh_t *)((byte *)(*pstudiohdr) + (*psubmodel)->meshindex) + j;
+			pmesh = (mstudiomesh_t *)((byte *)engine_pstudiohdr + engine_psubmodel->meshindex) + j;
 
-			auto ptricmds = (short *)((byte *)(*pstudiohdr) + pmesh->triindex);
+			auto ptricmds = (short *)((byte *)engine_pstudiohdr + pmesh->triindex);
 
 			r_studio_polys += pmesh->numtris;
 
@@ -808,6 +843,26 @@ void R_GLStudioDrawPoints(void)
 			if (r_fullbright->value >= 2)
 			{
 				flags = flags & 0xFC;
+			}
+
+			if (r_draw_nontransparent)
+			{
+				if (flags & STUDIO_NF_FLATSHADE)
+				{
+					if (stencilState != 2)
+					{
+						stencilState = 2;
+						qglStencilFunc(GL_ALWAYS, stencilState, 0xFF);
+					}
+				}
+				else
+				{
+					if (stencilState != 1)
+					{
+						stencilState = 1;
+						qglStencilFunc(GL_ALWAYS, stencilState, 0xFF);
+					}
+				}
 			}
 
 			int GBufferProgramState = GBUFFER_DIFFUSE_ENABLED;
@@ -828,6 +883,8 @@ void R_GLStudioDrawPoints(void)
 				qglEnable(GL_ALPHA_TEST);
 				qglAlphaFunc(GL_GREATER, 0.5);
 				qglDepthMask(GL_TRUE);
+
+				//GBufferProgramState |= GBUFFER_MASKED_ENABLED;
 			}
 			else if ((flags & STUDIO_NF_ADDITIVE) && (*currententity)->curstate.rendermode == kRenderNormal)
 			{
@@ -918,7 +975,7 @@ void R_GLStudioDrawPoints(void)
 							col[3] = 1.0f;
 							qglColor4fv(col);
 
-							av = &pauxverts[ptricmds[0]];
+							av = &engine_pauxverts[ptricmds[0]];
 							qglVertex3fv(av->fv);
 
 							if (iInitVBO & 2)
@@ -974,7 +1031,7 @@ void R_GLStudioDrawPoints(void)
 						{
 							qglTexCoord2f((*chrome)[ptricmds[1]][0] * s, (*chrome)[ptricmds[1]][1] * t);
 
-							lv = &pvlightvalues[ptricmds[1] * 3];
+							lv = &engine_pvlightvalues[ptricmds[1] * 3];
 
 							vec3_t vNormal;
 							VectorCopy(pstudionorms[ptricmds[1]], vNormal);
@@ -989,7 +1046,7 @@ void R_GLStudioDrawPoints(void)
 							qglNormal3fv(r_studionormal[ptricmds[1]]);
 							qglColor4f(fl[0], fl[1], fl[2], *r_blend);
 
-							av = &pauxverts[ptricmds[0]];
+							av = &engine_pauxverts[ptricmds[0]];
 							qglVertex3fv(av->fv);
 
 							if (iInitVBO & 2)
@@ -1046,7 +1103,7 @@ void R_GLStudioDrawPoints(void)
 						vec2_t st = { ptricmds[2] * s, ptricmds[3] * t };
 						qglTexCoord2fv(st);
 
-						lv = &(pvlightvalues[ptricmds[1] * 3]);
+						lv = &(engine_pvlightvalues[ptricmds[1] * 3]);
 
 						vec3_t vNormal;
 						VectorCopy(pstudionorms[ptricmds[1]], vNormal);
@@ -1069,7 +1126,7 @@ void R_GLStudioDrawPoints(void)
 							qglColor4f(fl[0], fl[1], fl[2], *r_blend);
 						}
 
-						av = &(pauxverts[ptricmds[0]]);
+						av = &(engine_pauxverts[ptricmds[0]]);
 						qglVertex3fv(av->fv);
 
 						if (iInitVBO & 2)
@@ -1161,8 +1218,12 @@ void R_GLStudioDrawPoints(void)
 	}//non-VBO way
 
 	qglEnable(GL_CULL_FACE);
-	qglStencilMask(0);
-	qglDisable(GL_STENCIL_TEST);
+
+	if (r_draw_nontransparent)
+	{
+		qglStencilMask(0);
+		qglDisable(GL_STENCIL_TEST);
+	}
 
 	//upload all data and indices to GPU
 	if (iInitVBO & 2)
@@ -1187,14 +1248,6 @@ void R_GLStudioDrawPoints(void)
 		VBOData->vVertex.shrink_to_fit();
 		VBOData->vIndices.shrink_to_fit();
 	}
-}
-
-void R_StudioRenderFinal(void)
-{
-	pauxverts = &auxverts[0];
-	pvlightvalues = (float *)&lightvalues[0];
-
-	gRefFuncs.R_StudioRenderFinal();
 }
 
 //StudioAPI
@@ -1241,14 +1294,6 @@ void studioapi_StudioDynamicLight(cl_entity_t *ent, alight_t *plight)
 			dl->die = dies[i];
 		}
 	}
-}
-
-void studioapi_SetupRenderer(int rendermode)
-{
-	pauxverts = &auxverts[0];
-	pvlightvalues = (float *)&lightvalues[0];
-
-	gRefFuncs.studioapi_SetupRenderer(rendermode);
 }
 
 void studioapi_RestoreRenderer(void)

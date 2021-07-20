@@ -16,8 +16,6 @@ RECT *window_rect;
 
 float *videowindowaspect;
 float *windowvideoaspect;
-float videowindowaspect_old;
-float windowvideoaspect_old;
 
 int *cl_numvisedicts;
 cl_entity_t **cl_visedicts;
@@ -28,10 +26,6 @@ transObjRef **transObjects;
 
 float scr_fov_value;
 GLint r_viewport[4];
-
-mplane_t custom_frustum[4];
-mplane_t *frustum;
-mleaf_t **r_viewleaf, **r_oldviewleaf;
 
 float yfov;
 
@@ -53,7 +47,7 @@ float *g_UserFogEnd;
 int *r_framecount;
 int *r_visframecount;
 
-frame_t *cl_frames;
+void *cl_frames;
 int size_of_frame = sizeof(frame_t);
 int *cl_parsecount;
 int *cl_waterlevel;
@@ -78,7 +72,8 @@ int *gl_msaa_fbo = 0;
 int *gl_backbuffer_fbo = 0;
 int *gl_mtexable = 0;
 qboolean *mtexenabled = 0;
-qboolean g_SvEngine_DrawPortalView = 0;
+
+bool g_SvEngine_DrawPortalView = 0;
 
 qboolean gl_framebuffer_object = false;
 qboolean gl_shader_support = false;
@@ -98,6 +93,8 @@ float r_identity_matrix[4][4] = {
 float r_rotate_entity_matrix[4][4];
 
 bool r_rotate_entity = false;
+
+bool r_draw_nontransparent = false;
 
 int r_draw_pass = 0;
 
@@ -201,7 +198,7 @@ qboolean R_CullBox(vec3_t mins, vec3_t maxs)
 	if (r_draw_pass == r_draw_shadow)
 		return false;
 
-	if ((*currententity)->model && (*currententity)->model->type == mod_studio)
+	if ((*currententity)->model && (*currententity)->model->type == mod_studio && (*currententity)->curstate.scale != 1.0f)
 	{
 		if ((*currententity)->curstate.scale > 8.0f)
 			return false;
@@ -267,6 +264,7 @@ void R_RotateForEntity(vec_t *origin, cl_entity_t *e)
 	r_rotate_entity = true;
 }
 
+//All sprite models goes transentities
 void R_DrawSpriteModel(cl_entity_t *entity)
 {
 	if (drawgbuffer)
@@ -278,21 +276,8 @@ void R_DrawSpriteModel(cl_entity_t *entity)
 	gRefFuncs.R_DrawSpriteModel(entity);
 }
 
-void R_GetSpriteAxes(cl_entity_t *entity, int type, float *vforwrad, float *vright, float *vup)
-{
-	gRefFuncs.R_GetSpriteAxes(entity, type, vforwrad, vright, vup);
-}
-
-void R_SpriteColor(mcolor24_t *col, cl_entity_t *entity, int renderamt)
-{
-	gRefFuncs.R_SpriteColor(col, entity, renderamt);
-}
-
 float GlowBlend(cl_entity_t *entity)
 {
-	if(gRefFuncs.GlowBlend)
-		return gRefFuncs.GlowBlend(entity);
-
 	vec3_t tmp;
 	float dist, brightness;
 
@@ -326,65 +311,23 @@ float GlowBlend(cl_entity_t *entity)
 
 int CL_FxBlend(cl_entity_t *entity)
 {
+	//Hack for R_DrawSpriteModel
+
+	if (entity->model && entity->model->type == mod_sprite && entity->curstate.rendermode == kRenderNormal)
+	{
+		return 255;
+	}
+
 	return gRefFuncs.CL_FxBlend(entity);
-}
-
-void R_Clear(void)
-{
-	if (r_mirroralpha && r_mirroralpha->value != 1.0)
-	{
-		qglDepthMask(GL_TRUE);
-		if (gl_clear->value)
-			qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-		else
-			qglClear(GL_DEPTH_BUFFER_BIT);
-
-		gldepthmin = 0;
-		gldepthmax = 0.5;
-		qglDepthFunc(GL_LEQUAL);
-	}
-	else if (gl_ztrick && gl_ztrick->value)
-	{
-		static int trickframe;
-
-		if (gl_clear->value)
-			qglClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-
-		trickframe++;
-
-		if (trickframe & 1)
-		{
-			gldepthmin = 0;
-			gldepthmax = 0.49999;
-			qglDepthFunc(GL_LEQUAL);
-		}
-		else
-		{
-			gldepthmin = 1;
-			gldepthmax = 0.5;
-			qglDepthFunc(GL_GEQUAL);
-		}
-	}
-	else
-	{
-		qglDepthMask(GL_TRUE);
-		if (gl_clear->value)
-			qglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-		else
-			qglClear(GL_DEPTH_BUFFER_BIT);
-
-		gldepthmin = 0;
-		gldepthmax = 1;
-		qglDepthFunc(GL_LEQUAL);
-	}
-
-	qglDepthRange(gldepthmin, gldepthmax);
 }
 
 void R_AddTEntity(cl_entity_t *pEnt)
 {
 	if (pEnt->model && pEnt->model->type == mod_brush && pEnt->curstate.rendermode == kRenderTransAlpha)
 	{
+		if (pEnt->curstate.renderamt == 0)
+			return;
+
 		cl_entity_t *backup_curentity = (*currententity);
 
 		(*currententity) = pEnt;
@@ -784,8 +727,6 @@ void R_SetRenderMode(cl_entity_t *pEntity)
 void R_DrawViewModel(void)
 {
 	float lightvec[3];
-	colorVec c;
-	float oldShadows;
 
 	lightvec[0] = -1;
 	lightvec[1] = 0;
@@ -793,63 +734,21 @@ void R_DrawViewModel(void)
 
 	(*currententity) = cl_viewent;
 
-	if (!r_drawviewmodel->value)
+	if (!r_drawviewmodel->value ||
+		gExportfuncs.CL_IsThirdPerson() ||
+		chase_active->value ||
+		(*envmap) ||
+		!r_drawentities->value ||
+		cl_stats[0] <= 0 ||
+		!(*currententity)->model ||
+		r_params.viewentity > r_params.maxclients)
 	{
-		c = R_LightPoint((*currententity)->origin);
+		auto c = R_LightPoint((*currententity)->origin);
 		(*cl_light_level) = (c.r + c.g + c.b) / 3;
 		return;
 	}
 
-	if (gExportfuncs.CL_IsThirdPerson())
-	{
-		c = R_LightPoint((*currententity)->origin);
-		(*cl_light_level) = (c.r + c.g + c.b) / 3;
-		return;
-	}
-
-	if (chase_active->value)
-	{
-		c = R_LightPoint((*currententity)->origin);
-		(*cl_light_level) = (c.r + c.g + c.b) / 3;
-		return;
-	}
-
-	if ((*envmap))
-	{
-		c = R_LightPoint((*currententity)->origin);
-		(*cl_light_level) = (c.r + c.g + c.b) / 3;
-		return;
-	}
-
-	if (!r_drawentities->value)
-	{
-		c = R_LightPoint((*currententity)->origin);
-		(*cl_light_level) = (c.r + c.g + c.b) / 3;
-		return;
-	}
-
-	if (cl_stats[0] <= 0)
-	{
-		c = R_LightPoint((*currententity)->origin);
-		(*cl_light_level) = (c.r + c.g + c.b) / 3;
-		return;
-	}
-
-	if (!(*currententity)->model)
-	{
-		c = R_LightPoint((*currententity)->origin);
-		(*cl_light_level) = (c.r + c.g + c.b) / 3;
-		return;
-	}
-
-	if (r_params.viewentity > r_params.maxclients)
-	{
-		c = R_LightPoint((*currententity)->origin);
-		(*cl_light_level) = (c.r + c.g + c.b) / 3;
-		return;
-	}
-
-	qglDepthRange(0, 0.3f);
+	qglDepthRange(0, 0.3);
 
 	switch ((*currententity)->model->type)
 	{
@@ -858,10 +757,8 @@ void R_DrawViewModel(void)
 		if (!(*cl_weaponstarttime))
 			(*cl_weaponstarttime) = (*cl_time);
 
-		int playernum = r_params.playernum;
-
 		hud_player_info_t hudPlayerInfo;
-		gEngfuncs.pfnGetPlayerInfo(r_params.playernum, &hudPlayerInfo);
+		gEngfuncs.pfnGetPlayerInfo(r_params.playernum + 1, &hudPlayerInfo);
 
 		(*currententity)->curstate.frame = 0;
 		(*currententity)->curstate.framerate = 1;
@@ -869,9 +766,9 @@ void R_DrawViewModel(void)
 		(*currententity)->curstate.animtime = (*cl_weaponstarttime);
 		(*currententity)->curstate.colormap = ((hudPlayerInfo.topcolor) % 0xFFFF) | ((hudPlayerInfo.bottomcolor << 8) % 0xFFFF);
 
-		c = R_LightPoint((*currententity)->origin);
+		auto c = R_LightPoint((*currententity)->origin);
 
-		oldShadows = r_shadows->value;
+		auto oldShadows = r_shadows->value;
 		r_shadows->value = 0;
 		(*cl_light_level) = (c.r + c.g + c.b) / 3;
 		(*gpStudioInterface)->StudioDrawModel(STUDIO_RENDER);
@@ -915,65 +812,6 @@ float CalcFov(float fov_x, float width, float height)
 	a = a * 360 / M_PI;
 
 	return a;
-}
-
-void R_SetCustomFrustum(float *org, float *vpn2, float *vright2, float *vup2, float fov)
-{
-	//Seems does't work well with SvEngine
-	if (fov == 90)
-	{
-		VectorAdd(vpn2, vright2, custom_frustum[0].normal);
-		VectorSubtract(vpn2, vright2, custom_frustum[1].normal);
-
-		VectorAdd(vpn2, vup2, custom_frustum[2].normal);
-		VectorSubtract(vpn2, vup2, custom_frustum[3].normal);
-	}
-	else
-	{
-		float yfov = CalcFov(fov, glwidth, glheight);
-
-		RotatePointAroundVector(custom_frustum[0].normal, vup2, vpn2, -(90 - fov / 2));
-		RotatePointAroundVector(custom_frustum[1].normal, vup2, vpn2, 90 - fov / 2);
-		RotatePointAroundVector(custom_frustum[2].normal, vright2, vpn2, 90 - yfov / 2);
-		RotatePointAroundVector(custom_frustum[3].normal, vright2, vpn2, -(90 - yfov / 2));
-	}
-
-	for (int i = 0; i < 4; i++)
-	{
-		custom_frustum[i].type = PLANE_ANYZ;
-		custom_frustum[i].dist = DotProduct(org, custom_frustum[i].normal);
-		custom_frustum[i].signbits = SignbitsForPlane(&custom_frustum[i]);
-	}
-}
-
-void R_SetFrustum(void)
-{
-	if(gRefFuncs.R_SetFrustum)
-		return gRefFuncs.R_SetFrustum();
-
-	//Seems does't work well with SvEngine
-	if (scr_fov_value == 90)
-	{
-		VectorAdd(vpn, vright, frustum[0].normal);
-		VectorSubtract(vpn, vright, frustum[1].normal);
-
-		VectorAdd(vpn, vup, frustum[2].normal);
-		VectorSubtract(vpn, vup, frustum[3].normal);
-	}
-	else
-	{
-		RotatePointAroundVector(frustum[0].normal, vup, vpn, -(90 - scr_fov_value / 2));
-		RotatePointAroundVector(frustum[1].normal, vup, vpn, 90 - scr_fov_value / 2);
-		RotatePointAroundVector(frustum[2].normal, vright, vpn, 90 - yfov / 2);
-		RotatePointAroundVector(frustum[3].normal, vright, vpn, -(90 - yfov / 2));
-	}
-
-	for (int i = 0; i < 4; i++)
-	{
-		frustum[i].type = PLANE_ANYZ;
-		frustum[i].dist = DotProduct(r_origin, frustum[i].normal);
-		frustum[i].signbits = SignbitsForPlane(&frustum[i]);
-	}
 }
 
 int SignbitsForPlane(mplane_t *out)
@@ -1059,6 +897,9 @@ void GL_FreeFBO(FBO_Container_t *s)
 	if (s->s_hBackBufferDepthTex)
 		qglDeleteTextures(1, &s->s_hBackBufferDepthTex);
 
+	if (s->s_hBackBufferStencilView)
+		qglDeleteTextures(1, &s->s_hBackBufferStencilView);
+
 	GL_ClearFBO(s);
 }
 
@@ -1069,7 +910,7 @@ bool GL_IsValidSampleCount(int msaa_samples)
 
 bool R_UseMSAA(void)
 {
-	return s_MSAAFBO.s_hBackBufferFBO && GL_IsValidSampleCount((int)r_msaa->value) && !g_SvEngine_DrawPortalView;
+	return s_MSAAFBO.s_hBackBufferFBO && GL_IsValidSampleCount((int)r_msaa->value) && !r_draw_pass && !g_SvEngine_DrawPortalView;
 }
 
 void GL_GenerateFBO(void)
@@ -1421,7 +1262,7 @@ void GL_BeginRendering(int *x, int *y, int *width, int *height)
 
 void R_PreRenderView(int a1)
 {
-	g_SvEngine_DrawPortalView = a1;
+	g_SvEngine_DrawPortalView = a1 ? true : false;
 
 	r_studio_framecount++;
 	r_fog_mode = 0;
@@ -1488,7 +1329,7 @@ void R_PostRenderView()
 
 	qglBindFramebufferEXT(GL_FRAMEBUFFER, s_BackBufferFBO.s_hBackBufferFBO);
 
-	g_SvEngine_DrawPortalView = 0;	
+	g_SvEngine_DrawPortalView = false;	
 }
 
 void R_PreDrawViewModel(void)
@@ -1496,15 +1337,6 @@ void R_PreDrawViewModel(void)
 	(*currententity) = cl_viewent;
 
 	if (!r_drawviewmodel->value)
-		return;
-
-	if (gExportfuncs.CL_IsThirdPerson())
-		return;
-
-	if (chase_active->value)
-		return;
-
-	if ((*envmap))
 		return;
 
 	if (!r_drawentities->value)
@@ -1531,13 +1363,16 @@ void R_PreDrawViewModel(void)
 		(*currententity)->curstate.framerate = 1;
 		(*currententity)->curstate.animtime = (*cl_weaponstarttime);
 
-		auto ent = gEngfuncs.GetEntityByIndex((*currententity)->index);
-		for (int i = 0; i < 4; i++)
+		if (!gExportfuncs.CL_IsThirdPerson() && !chase_active->value && !(*envmap) && cl_stats[0] > 0)
 		{
-			VectorCopy(ent->origin, (*currententity)->attachment[i]);
-		}
+			auto ent = gEngfuncs.GetEntityByIndex((*currententity)->index);
+			for (int i = 0; i < 4; i++)
+			{
+				VectorCopy(ent->origin, (*currententity)->attachment[i]);
+			}
 
-		(*gpStudioInterface)->StudioDrawModel(STUDIO_EVENTS);
+			(*gpStudioInterface)->StudioDrawModel(STUDIO_EVENTS);
+		}
 		break;
 	}
 	}
@@ -1614,7 +1449,7 @@ void R_RenderView_SvEngine(int a1)
 
 		auto time2 = gEngfuncs.GetAbsoluteTime();
 
-		gEngfuncs.Con_Printf("%3ifps %3i ms, %4i brushpolys, %4i brushdraw, %4i studiopolys, %4i studiodraw\n",
+		gEngfuncs.Con_Printf("%3ifps %3i ms, %d brushpolys, %4i brushdraw, %d studiopolys, %4i studiodraw\n",
 			(int)(framerate + 0.5), (int)((time2 - time1) * 1000), 
 			r_wsurf_polys, r_wsurf_drawcall,
 			r_studio_polys, r_studio_drawcall
@@ -1819,7 +1654,7 @@ void R_ForceCVars(qboolean mp)
 	if (r_draw_pass)
 		return;
 
-	gRefFuncs.R_ForceCVars(mp);
+	//gRefFuncs.R_ForceCVars(mp);
 }
 
 void R_NewMap(void)

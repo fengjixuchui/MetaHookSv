@@ -47,6 +47,7 @@ typedef struct
 	int program;
 	int positionTex;
 	int normalTex;
+	int stencilTex;
 	int viewpos;
 	int lightdir;
 	int lightpos;
@@ -86,6 +87,7 @@ void R_UseGBufferProgram(int state, gbuffer_program_t *progOutput);
 #define GBUFFER_LIGHTMAP_ARRAY_ENABLED	8
 #define GBUFFER_TRANSPARENT_ENABLED		16
 #define GBUFFER_ADDITIVE_ENABLED		32
+#define GBUFFER_MASKED_ENABLED			64
 
 #define DLIGHT_LIGHT_PASS				2
 #define DLIGHT_LIGHT_PASS_SPOT			4

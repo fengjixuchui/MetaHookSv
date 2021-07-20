@@ -11,7 +11,14 @@ mh_enginesave_t *g_pMetaSave;
 IFileSystem *g_pFileSystem;
 
 HINSTANCE g_hInstance, g_hThisModule, g_hEngineModule;
-DWORD g_dwEngineBase, g_dwEngineSize;
+PVOID g_dwEngineBase;
+DWORD g_dwEngineSize;
+PVOID g_dwEngineTextBase;
+DWORD g_dwEngineTextSize;
+PVOID g_dwEngineDataBase;
+DWORD g_dwEngineDataSize;
+PVOID g_dwEngineRdataBase;
+DWORD g_dwEngineRdataSize;
 DWORD g_dwEngineBuildnum;
 int g_iEngineType;
 
@@ -48,9 +55,16 @@ void IPlugins::LoadEngine(void)
 	g_hEngineModule = g_pMetaHookAPI->GetEngineModule();
 	g_dwEngineBase = g_pMetaHookAPI->GetEngineBase();
 	g_dwEngineSize = g_pMetaHookAPI->GetEngineSize();
+	g_dwEngineTextBase = g_pMetaHookAPI->GetSectionByName(g_dwEngineBase, ".text\x0\x0\x0", &g_dwEngineTextSize);
+	g_dwEngineDataBase = g_pMetaHookAPI->GetSectionByName(g_dwEngineBase, ".data\x0\x0\x0", &g_dwEngineDataSize);
+	g_dwEngineRdataBase = g_pMetaHookAPI->GetSectionByName(g_dwEngineBase, ".rdata\x0\x0", &g_dwEngineRdataSize);
+
+	if(g_iEngineType != ENGINE_SVENGINE && g_iEngineType != ENGINE_GOLDSRC_NEW)
+	{
+		Sys_ErrorEx("Unsupported engine: %s, buildnum %d", g_pMetaHookAPI->GetEngineTypeName(), g_dwEngineBuildnum);
+	}
 
 	R_FillAddress();
-	R_InstallHook();
 }
 
 void IPlugins::LoadClient(cl_exportfuncs_t *pExportFunc)
@@ -65,6 +79,8 @@ void IPlugins::LoadClient(cl_exportfuncs_t *pExportFunc)
 	{
 		Sys_ErrorEx("Software mode is not supported.");
 	}
+
+	R_InstallHook();
 
 	memcpy(&gExportfuncs, pExportFunc, sizeof(gExportfuncs));
 	memcpy(&gEngfuncs, g_pMetaSave->pEngineFuncs, sizeof(gEngfuncs));
@@ -85,8 +101,6 @@ void IPlugins::LoadClient(cl_exportfuncs_t *pExportFunc)
 	pExportFunc->HUD_Init = HUD_Init;
 	pExportFunc->V_CalcRefdef = V_CalcRefdef;
 	pExportFunc->HUD_DrawNormalTriangles = HUD_DrawNormalTriangles;
-	//pExportFunc->HUD_VidInit = HUD_VidInit;
-	//pExportFunc->HUD_DrawTransparentTriangles = HUD_DrawTransparentTriangles;
 }
 
 void IPlugins::ExitGame(int iResult)
